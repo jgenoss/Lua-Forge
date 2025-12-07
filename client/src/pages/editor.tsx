@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import ReactFlow, {
   ReactFlowProvider,
   addEdge,
@@ -6,11 +6,9 @@ import ReactFlow, {
   useEdgesState,
   Controls,
   Background,
-  BackgroundVariant,
   Connection,
   Edge,
   Node,
-  Panel,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 
@@ -24,7 +22,6 @@ import {
   Download, 
   Save, 
   Code2,
-  Play,
   Layout,
   FileCode,
   RefreshCw
@@ -35,15 +32,15 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
 // Define Node Types Registry
 const nodeTypes = {
-  // Eventos
+  // Eventos y Funciones
   'event-start': CustomNode,
+  'function-def': CustomNode, // <--- NUEVO TIPO PARA FUNCIONES
   'event-trigger': CustomNode,
   'event-net': CustomNode,
   'event-server': CustomNode,
@@ -51,8 +48,7 @@ const nodeTypes = {
   'add-event-handler': CustomNode,
   'thread-create': CustomNode,
   'wait': CustomNode,
-  'register-key-mapping': CustomNode, // El que añadimos antes
-  'function-def': CustomNode,
+  'register-key-mapping': CustomNode,
 
   // Entidades
   'create-ped': CustomNode,
@@ -73,6 +69,7 @@ const nodeTypes = {
   'qb-notify': CustomNode,
   'qb-command': CustomNode,
   'esx-notify': CustomNode,
+  'qb-trigger-callback': CustomNode,
 
   // Lógica y Matemáticas
   'logic-if': CustomNode,
@@ -89,7 +86,10 @@ const nodeTypes = {
 
   // SQL
   'sql-query': CustomNode,
-  'sql-insert': CustomNode
+  'sql-insert': CustomNode,
+  
+  // Generico
+  'native-control': CustomNode
 };
 
 interface File {
@@ -111,13 +111,8 @@ export default function EditorPage() {
       name: 'client.lua', 
       type: 'client', 
       active: true,
-      nodes: [
-        { id: '1', type: 'event-start', data: { label: 'Register Command' }, position: { x: 100, y: 100 } },
-        { id: '2', type: 'qb-notify', data: { label: 'Notify Player' }, position: { x: 400, y: 100 } }
-      ],
-      edges: [
-        { id: 'e1-2', source: '1', target: '2', sourceHandle: 'flow-out', targetHandle: 'flow-in' }
-      ]
+      nodes: [],
+      edges: []
     },
     { 
       id: '2', 
@@ -129,38 +124,6 @@ export default function EditorPage() {
     }
   ]);
 
-  const saveProject = () => {
-    // 1. Guardar el estado actual del archivo activo antes de nada
-    const updatedFiles = files.map(f => {
-      if (f.id === activeFile.id) {
-        return { 
-            ...f, 
-            nodes: nodes, 
-            edges: edges,
-            content: viewMode === 'code' ? generatedCode : f.content // Guardar lo que estés viendo
-        };
-      }
-      return f;
-    });
-
-    setFiles(updatedFiles);
-
-    // 2. Guardar en LocalStorage (Persistencia básica)
-    try {
-      localStorage.setItem('luaforge_project', JSON.stringify(updatedFiles));
-      toast({
-        title: "Proyecto Guardado",
-        description: "Tus cambios se han guardado localmente.",
-        className: "bg-green-600 text-white border-none"
-      });
-    } catch (e) {
-      toast({
-        title: "Error al guardar",
-        description: "No se pudo escribir en el almacenamiento local.",
-        variant: "destructive"
-      });
-    }
-  };
   const activeFile = files.find(f => f.active) || files[0];
 
   const [nodes, setNodes, onNodesChange] = useNodesState(activeFile.nodes);
@@ -179,62 +142,16 @@ export default function EditorPage() {
     setEdges(activeFile.edges);
     if (activeFile.content) {
         setGeneratedCode(activeFile.content);
-    } else {
-        generateLuaCode(activeFile.nodes, activeFile.edges);
     }
   }, [activeFile.id]);
 
-  const onGraphChange = useCallback(() => {
-    if (isSyncing) return;
-    
-    // Generar código solo cuando hay cambios reales
-    generateLuaCode(nodes, edges);
-
-    // Actualizar estructura de archivos
-    setFiles(prev => prev.map(f => {
-      if (f.id === activeFile.id) {
-        return { ...f, nodes, edges };
-      }
-      return f;
-    }));
-  }, [nodes, edges, isSyncing, activeFile.id]);
-
-  const onNodeDragStop = useCallback(() => {
-    onGraphChange();
-  }, [onGraphChange]);
-
-  const onConnect = useCallback(
-    (params: Connection) => {
-      setEdges((eds) => addEdge(params, eds));
-      // Usamos setTimeout para esperar a que el estado se actualice
-      setTimeout(onGraphChange, 50); 
-    },
-    [setEdges, onGraphChange],
-  );
-
-  const updateNodeData = (key: string, value: any) => {
-    if (!selectedNode) return;
-    setNodes((nds) =>
-      nds.map((node) => {
-        if (node.id === selectedNode.id) {
-          const newData = { ...node.data, [key]: value };
-          setSelectedNode({ ...node, data: newData });
-          return { ...node, data: newData };
-        }
-        return node;
-      })
-    );
-    // IMPORTANTE: Regenerar código al cambiar propiedades
-    setTimeout(onGraphChange, 50);
-  };
-
+  // Cargar proyecto guardado
   useEffect(() => {
     const saved = localStorage.getItem('luaforge_project');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
         setFiles(parsed);
-        // Cargar el archivo activo
         const active = parsed.find((f: any) => f.active) || parsed[0];
         setNodes(active.nodes || []);
         setEdges(active.edges || []);
@@ -245,24 +162,52 @@ export default function EditorPage() {
     }
   }, []);
 
-  const generateLuaCode = (currentNodes: Node[], currentEdges: Edge[]) => {
-    if (isSyncing) return; // Evitar bucles infinitos durante el parseo
+  const saveProject = () => {
+    const updatedFiles = files.map(f => {
+      if (f.id === activeFile.id) {
+        return { 
+            ...f, 
+            nodes: nodes, 
+            edges: edges,
+            content: viewMode === 'code' ? generatedCode : f.content
+        };
+      }
+      return f;
+    });
 
-    // 1. HEADER: Usamos el que guardamos o uno por defecto si es nuevo
+    setFiles(updatedFiles);
+    try {
+      localStorage.setItem('luaforge_project', JSON.stringify(updatedFiles));
+      toast({
+        title: "Proyecto Guardado",
+        description: "Tus cambios se han guardado localmente.",
+        className: "bg-green-600 text-white border-none"
+      });
+    } catch (e) {
+      toast({
+        title: "Error al guardar",
+        description: "No se pudo escribir en el almacenamiento local.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  // --- GENERADOR DE CÓDIGO (VISUAL -> LUA) ---
+  const generateLuaCode = (currentNodes: Node[], currentEdges: Edge[]) => {
+    if (isSyncing) return;
+
     let code = activeFile.headerCode 
         ? activeFile.headerCode + '\n\n' 
         : `-- Generado por LuaForge\nlocal QBCore = exports['qb-core']:GetCoreObject()\n\n`;
 
+    // Filtramos los nodos raíz (Inicios de flujo)
     const startNodes = currentNodes.filter(n => 
         typeof n.type === 'string' && ['event-start', 'register-net', 'register-key-mapping', 'qb-command', 'thread-create', 'function-def'].includes(n.type)
     ).sort((a, b) => a.position.y - b.position.y);
 
-    // Función recursiva para generar bloques de lógica
     const generateBlock = (parentId: string, indent: string): string => {
         let block = '';
         
-        // Buscar hijos conectados a 'flow-out' (flujo normal) o 'true' (IF verdadero)
-        // Ordenamos por X para seguir la secuencia visual izquierda -> derecha
         const connections = currentEdges
             .filter(e => e.source === parentId)
             .sort((a, b) => {
@@ -274,50 +219,34 @@ export default function EditorPage() {
         for (const edge of connections) {
             const node = currentNodes.find(n => n.id === edge.target);
             if (!node) continue;
-
-            // Si es un 'else' (handle false), lo gestionamos dentro del IF, no aquí
-            if (edge.sourceHandle === 'false') continue;
+            if (edge.sourceHandle === 'false') continue; // Ignoramos 'else' aquí
 
             switch (node.type) {
                 case 'logic-if':
                     block += `${indent}if ${node.data.condition || 'true'} then\n`;
-                    // Recursión: Generar lo que hay dentro del IF (camino True)
                     block += generateBlock(node.id, indent + '    ');
                     
-                    // Buscar si tiene un camino False (Else)
                     const falseEdge = currentEdges.find(e => e.source === node.id && e.sourceHandle === 'false');
                     if (falseEdge) {
                         block += `${indent}else\n`;
-                        // Generar el bloque Else (Truco: generamos a partir del primer nodo del else)
-                        // Para hacerlo bien, deberíamos tratar el nodo target como el inicio de un bloque
-                        // En este generador simple, asumimos que el nodo target ES el bloque
                         const elseNode = currentNodes.find(n => n.id === falseEdge.target);
                         if (elseNode) {
-                             // Generamos ese nodo y sus hijos
-                             // Nota: Esto es una simplificación, idealmente elseNode es el inicio de una cadena
-                             // Pero necesitamos generar el código de ese nodo primero
-                             // Aquí duplicamos lógica por brevedad, lo ideal es una función `generateNodeCode`
                              if (elseNode.data.codeBlock) block += `${indent}    ${elseNode.data.codeBlock}\n`;
-                             else block += `${indent}    -- Lógica Else (TODO)\n`;
+                             block += generateBlock(elseNode.id, indent + '    ');
                         }
                     }
                     block += `${indent}end\n`;
                     break;
 
                 case 'native-control':
-                case 'create-ped': // Y cualquier otro nodo de acción
-                    // Si tiene un bloque de código exacto guardado, úsalo.
+                case 'create-ped': 
                     if (node.data.codeBlock) {
                         block += `${indent}${node.data.codeBlock}\n`;
                     } else if (node.data.label && node.data.label.includes('Call:')) {
-                         // Reconstrucción si no hay codeBlock
                          block += `${indent}${node.data.label.replace('Call: ', '')}\n`;
                     } else {
-                         // Fallback seguro
                          block += `${indent}-- ${node.data.label}\n`;
                     }
-                    // IMPORTANTE: Seguir la cadena (Recursión lineal)
-                    // Como native-control no es un contenedor, sus hijos son "siguientes pasos"
                     block += generateBlock(node.id, indent);
                     break;
 
@@ -334,7 +263,17 @@ export default function EditorPage() {
                      break;
 
                 case 'logic-print':
-                    block += `${indent}print('${node.data.message}')\n`;
+                    // Si tiene formato complejo, no poner comillas
+                    if (node.data.message.includes('%') || node.data.message.includes('..')) {
+                        block += `${indent}print(${node.data.message})\n`;
+                    } else {
+                        block += `${indent}print('${node.data.message}')\n`;
+                    }
+                    block += generateBlock(node.id, indent);
+                    break;
+                
+                case 'wait':
+                    block += `${indent}Wait(${node.data.duration || 0})\n`;
                     block += generateBlock(node.id, indent);
                     break;
             }
@@ -342,10 +281,9 @@ export default function EditorPage() {
         return block;
     };
 
-    // Generar código para cada raíz
     startNodes.forEach(node => {
         if (node.type === 'function-def') {
-            code += `function ${node.data.eventName}()\n`; 
+            code += `function ${node.data.eventName}()\n`; // Escribe function X()
             code += generateBlock(node.id, '    ');
             code += `end\n\n`;
         }
@@ -367,116 +305,20 @@ export default function EditorPage() {
     });
 
     setGeneratedCode(code);
-    
-    // Actualizar persistencia solo si no estamos sincronizando desde el parser
     setFiles(prev => prev.map(f => f.id === activeFile.id ? { ...f, content: code } : f));
   };
 
-  const handleCodeChange = (value: string | undefined) => {
-    const val = value || '';
-    setGeneratedCode(val);
-    
-    // Actualizar el archivo activo con el código manual
-    setFiles(prev => prev.map(f => {
-        if (f.id === activeFile.id) {
-            return { ...f, content: val };
-        }
-        return f;
-    }));
-  };
-  // Función auxiliar para iniciar la recursión limpia
-  const findAndGenerateChildren = (node: Node, nodes: Node[], edges: Edge[], indent: string) => {
-      let content = '';
-      const connectedEdges = edges.filter(e => e.source === node.id);
-      connectedEdges.forEach(edge => {
-          const targetNode = nodes.find(n => n.id === edge.target);
-          if (targetNode) {
-              content += generateNodeLogic(targetNode, nodes, edges, indent);
-          }
-      });
-      return content;
-  };
-
-  const generateNodeLogic = (node: Node, allNodes: Node[], allEdges: Edge[], indent: string): string => {
-      let snippet = '';
-      
-      // 1. GENERAR CÓDIGO SEGÚN EL TIPO DE NODO
-      switch (node.type) {
-          case 'qb-notify':
-              snippet = `${indent}QBCore.Functions.Notify('${node.data.message || 'Alerta'}', '${node.data.notifyType || 'success'}')\n`;
-              break;
-          case 'logic-print':
-              snippet = `${indent}print('${node.data.message || 'Debug message'}')\n`;
-              break;
-          case 'wait':
-              snippet = `${indent}Wait(${node.data.duration || 0})\n`;
-              break;
-          case 'create-ped':
-              // Ejemplo: CreatePed(type, hash, x, y, z, h, isNetwork, bScriptHost)
-              snippet = `${indent}local ped = CreatePed(4, ${node.data.model || 'GetHashKey("mp_m_freemode_01")'}, 0.0, 0.0, 0.0, 0.0, true, true)\n`;
-              break;
-          case 'set-entity-coords':
-              snippet = `${indent}SetEntityCoords(${node.data.entity || 'PlayerPedId()'}, ${node.data.x || 0}, ${node.data.y || 0}, ${node.data.z || 0}, false, false, false, false)\n`;
-              break;
-          case 'qb-command':
-              // Este suele ser un evento de inicio, pero si se usa inline:
-              snippet = `${indent}-- Comando registrado arriba\n`; 
-              break;
-          case 'logic-if':
-              snippet = `${indent}if ${node.data.condition || 'true'} then\n`;
-              break;
-          default:
-              snippet = `${indent}-- TODO: Implementar lógica para ${node.type} (${node.data.label})\n`;
-      }
-
-      // 2. MANEJAR CONEXIONES (FLUJO)
-      
-      // CASO ESPECIAL: Nodos condicionales (IF/ELSE)
-      if (node.type === 'logic-if') {
-          // Camino VERDADERO (Source handle: 'true')
-          const trueEdges = allEdges.filter(e => e.source === node.id && e.sourceHandle === 'true');
-          trueEdges.forEach(edge => {
-             const target = allNodes.find(n => n.id === edge.target);
-             if (target) snippet += generateNodeLogic(target, allNodes, allEdges, indent + '    ');
-          });
-
-          // Camino FALSO (Source handle: 'false')
-          const falseEdges = allEdges.filter(e => e.source === node.id && e.sourceHandle === 'false');
-          if (falseEdges.length > 0) {
-              snippet += `${indent}else\n`;
-              falseEdges.forEach(edge => {
-                 const target = allNodes.find(n => n.id === edge.target);
-                 if (target) snippet += generateNodeLogic(target, allNodes, allEdges, indent + '    ');
-              });
-          }
-          
-          snippet += `${indent}end\n`;
-      } 
-      // CASO NORMAL: Flujo lineal
-      else {
-          const nextEdges = allEdges.filter(e => e.source === node.id);
-          nextEdges.forEach(edge => {
-              const nextNode = allNodes.find(n => n.id === edge.target);
-              if (nextNode) {
-                  snippet += generateNodeLogic(nextNode, allNodes, allEdges, indent);
-              }
-          });
-      }
-
-      return snippet;
-  };
-  
+  // --- PARSER (LUA -> VISUAL) ---
   const applyCodeToVisual = () => {
     setIsSyncing(true);
     const code = generatedCode;
     const newNodes: Node[] = [];
     const newEdges: Edge[] = [];
     
-    // Palabras clave para detectar dónde empieza la lógica parseable
     const actionKeywords = [
         'RegisterCommand', 'RegisterNetEvent', 'RegisterKeyMapping', 
         'QBCore.Commands.Add', 'CreateThread', 'AddEventHandler',
-        'function ' // <--- IMPORTANTE
+        'function ' 
     ];
     
     const lines = code.split('\n');
@@ -484,7 +326,6 @@ export default function EditorPage() {
 
     for (let i = 0; i < lines.length; i++) {
         const trimmed = lines[i].trim();
-        // Detectar inicio si empieza con keyword, pero no es un comentario
         if (actionKeywords.some(kw => trimmed.startsWith(kw)) && !trimmed.startsWith('--')) {
             firstActionIndex = i;
             break;
@@ -520,109 +361,108 @@ export default function EditorPage() {
     };
 
     for (let i = 0; i < bodyCodeLines.length; i++) {
-        const line = bodyCodeLines[i].trim();
+        const rawLine = bodyCodeLines[i];
+        const line = rawLine.trim();
         if (!line || line.startsWith('--')) continue; 
 
-        // --- DETECTAR BLOQUES PRINCIPALES (Roots) ---
-        
-        // 1. FUNCIONES (Globales o Clases como gClass:Initialize)
-        // Regex: function Nombre:Metodo() o function Nombre()
+        // DETECTOR FUNCIONES
         const funcMatch = line.match(/^function\s+([a-zA-Z0-9_.:]+)\s*\(/);
         if (funcMatch) {
             const funcName = funcMatch[1];
-            // ¡IMPORTANTE! Usamos el tipo 'function-def'
             const nodeId = addNode('function-def', `Función: ${funcName}`, { eventName: funcName }, rootX, currentY);
             parentStack = [{ id: nodeId, x: rootX, y: currentY }];
-            currentY += 200;
+            currentY += 250;
             continue;
         }
 
-        // 2. COMANDOS
+        // DETECTOR COMANDOS
         const cmdMatch = line.match(/(?:RegisterCommand|QBCore\.Commands\.Add)\s*\(\s*['"]([^'"]+)['"]/);
         if (cmdMatch) {
             const cmdId = addNode('event-start', `Comando: ${cmdMatch[1]}`, { eventName: cmdMatch[1] }, rootX, currentY);
             parentStack = [{ id: cmdId, x: rootX, y: currentY }]; 
-            currentY += 200; 
+            currentY += 250; 
             continue;
         }
 
-        // 3. EVENTOS DE RED
+        // DETECTOR NET EVENTS
         const netMatch = line.match(/RegisterNetEvent\s*\(\s*(.+?)\s*,/);
         if (netMatch) {
             const cleanName = netMatch[1].replace(/app\.resourceName\s*\.\.\s*/, '').replace(/['":]/g, '');
             const evtId = addNode('register-net', `Net: ${cleanName}`, { eventName: netMatch[1] }, rootX, currentY);
             parentStack = [{ id: evtId, x: rootX, y: currentY }];
-            currentY += 200;
+            currentY += 250;
             continue;
         }
 
-        // --- DETECTAR LÓGICA INTERNA (Hijos) ---
+        // DETECTOR KEY MAPPING
+        const keyMatch = line.match(/RegisterKeyMapping\s*\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]/);
+        if (keyMatch) {
+            addNode('register-key-mapping', `Tecla: ${keyMatch[4]}`, { 
+                commandName: keyMatch[1], description: keyMatch[2], defaultKey: keyMatch[4] 
+            }, rootX, currentY);
+            currentY += 100;
+            continue;
+        }
+
+        // LÓGICA HIJA
         if (parentStack.length > 0) {
             const parent = parentStack[parentStack.length - 1];
             const childX = parent.x + 350; 
             const childY = parent.y; 
-
             let nodeId: string | null = null;
 
-            // 1. CONDICIONALES (IF) MEJORADO
-            // Regex detecta: "if condition then" manejando espacios
+            // IF STATEMENT
             const ifMatch = line.match(/^if\s+(.+)\s+then$/);
             if (ifMatch) {
                 const condition = ifMatch[1];
-                // Crea nodo visual
-                const nodeId = addNode('logic-if', 'Condición IF', { condition }, parentStack[parentStack.length - 1].x + 350, parentStack[parentStack.length - 1].y);
-                
-                // Conecta al padre
-                linkNodes(parentStack[parentStack.length - 1].id, nodeId);
-                
-                // Entramos al bloque IF
-                parentStack.push({ id: nodeId, x: parentStack[parentStack.length - 1].x + 350, y: parentStack[parentStack.length - 1].y });
+                nodeId = addNode('logic-if', 'Condición IF', { condition }, childX, childY);
+                linkNodes(parent.id, nodeId);
+                parentStack.push({ id: nodeId, x: childX, y: childY });
                 continue;
             }
-
-            else if (line.startsWith('print')) {
-                // Si el print tiene lógica compleja (format, concatenación, variables),
-                // lo guardamos como BLOQUE DE CÓDIGO NATURAl para no romperlo.
-                if (line.includes(':format') || line.includes('..') || line.includes('%')) {
-                     nodeId = addNode('native-control', 'Print Complejo', { 
-                        label: 'Print (Format)',
-                        codeBlock: line 
-                    }, childX, childY);
-                } else {
-                    // Solo usamos el nodo visual simple para textos simples
-                    const pMatch = line.match(/\(([^)]+)\)/);
-                    nodeId = addNode('logic-print', 'Debug Print', { 
-                        message: pMatch ? pMatch[1].replace(/['"]/g, '') : 'log'
-                    }, childX, childY);
-                }
-            }
             
-            // FIN DE BLOQUE (end)
-            else if (line === 'end' || line.startsWith('end)')) {
+            // END BLOCK
+            if (line === 'end' || line.startsWith('end)')) {
                 if (parentStack.length > 0) parentStack.pop();
                 continue;
             }
-            // ELSE
-            else if (line.startsWith('else')) {
-                // (Opcional) Podrías ajustar la posición Y aquí para ramificar visualmente
-                continue;
+
+            // WAIT
+            if (line.startsWith('Wait(')) {
+                 const duration = line.match(/\d+/);
+                 nodeId = addNode('wait', 'Esperar', { duration: duration ? duration[0] : 0 }, childX, childY);
             }
-            
-            // Ejemplo Call:
-            else if (line.match(/\b(app|self):([a-zA-Z0-9_]+)\s*\(/)) {
-                const callMatch = line.match(/\b(app|self):([a-zA-Z0-9_]+)/);
-                const funcName = callMatch ? callMatch[2] : 'Método';
-                const objectName = callMatch ? callMatch[1] : 'app';
-                nodeId = addNode('native-control', `Call: ${objectName}:${funcName}`, { label: `${objectName}:${funcName}`, codeBlock: line }, childX, childY);
-            }
-            // Ejemplo Print:
+            // PRINT (Complex vs Simple)
             else if (line.startsWith('print')) {
-                const pMatch = line.match(/\(([^)]+)\)/);
-                nodeId = addNode('logic-print', 'Debug Print', { message: pMatch ? pMatch[1].replace(/['"]/g, '') : 'log' }, childX, childY);
+                if (line.includes(':format') || line.includes('%') || line.includes('..')) {
+                     // Guardar código crudo para preservar formato
+                     nodeId = addNode('native-control', 'Print (Format)', { codeBlock: line }, childX, childY);
+                } else {
+                    const pMatch = line.match(/\(([^)]+)\)/);
+                    const msg = pMatch ? pMatch[1].replace(/['"]/g, '') : 'log';
+                    nodeId = addNode('logic-print', 'Debug Print', { message: msg }, childX, childY);
+                }
             }
-            // Catch-all para código genérico
+            // QB NOTIFY
+            else if (line.includes('Notify')) {
+                const msgMatch = line.match(/['"]([^'"]+)['"]/);
+                nodeId = addNode('qb-notify', 'Notificación', { 
+                    message: msgMatch ? msgMatch[1] : 'Alerta',
+                    notifyType: line.includes('error') ? 'error' : 'success'
+                }, childX, childY);
+            }
+            // CALLBACKS
+            else if (line.includes('TriggerCallback')) {
+                const cbMatch = line.match(/['"]([^'"]+)['"]/);
+                const cbName = cbMatch ? cbMatch[1] : 'Callback';
+                nodeId = addNode('qb-trigger-callback', `Callback: ${cbName}`, { eventName: cbName }, childX, childY);
+            }
+            // GENERIC CODE
             else {
-                 nodeId = addNode('native-control', 'Lua Script', { label: 'Code Line', codeBlock: line }, childX, childY);
+                 nodeId = addNode('native-control', 'Lua Code', { 
+                    label: 'Script',
+                    codeBlock: line // Se guarda la línea cruda sin trim para preservar algo de formato si es necesario, aunque trim es mejor para visual
+                }, childX, childY);
             }
 
             if (nodeId) {
@@ -635,7 +475,6 @@ export default function EditorPage() {
 
     setNodes(newNodes);
     setEdges(newEdges);
-    // ... (resto de la función save) ...
     setFiles(prev => prev.map(f => {
         if (f.id === activeFile.id) {
             return { 
@@ -649,7 +488,109 @@ export default function EditorPage() {
         return f;
     }));
     
+    toast({ title: "Código Convertido", description: "La estructura visual ha sido actualizada." });
     setTimeout(() => setIsSyncing(false), 500);
+  };
+
+  const handleCodeChange = (value: string | undefined) => {
+    const val = value || '';
+    setGeneratedCode(val);
+    
+    setFiles(prev => prev.map(f => {
+        if (f.id === activeFile.id) {
+            return { ...f, content: val };
+        }
+        return f;
+    }));
+  };
+
+  // --- MANEJO DE CAMBIOS SEGURO ---
+  const onGraphChange = useCallback(() => {
+    if (isSyncing) return;
+    generateLuaCode(nodes, edges);
+    
+    setFiles(prev => prev.map(f => {
+      if (f.id === activeFile.id) {
+        return { ...f, nodes, edges };
+      }
+      return f;
+    }));
+  }, [nodes, edges, isSyncing, activeFile.id]);
+
+  // Solo guardar al soltar un nodo
+  const onNodeDragStop = useCallback(() => {
+    onGraphChange();
+  }, [onGraphChange]);
+
+  const onConnect = useCallback(
+    (params: Connection) => {
+      setEdges((eds) => addEdge(params, eds));
+      setTimeout(onGraphChange, 50);
+    },
+    [setEdges, onGraphChange],
+  );
+
+  const onDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+  }, []);
+
+  const onDrop = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+
+      const dataTransfer = event.dataTransfer;
+      if (!dataTransfer) return; // Protección: event.dataTransfer puede ser null en algunos navegadores/escenarios
+
+      const type = dataTransfer.getData('application/reactflow/type');
+      const label = dataTransfer.getData('application/reactflow/label');
+      if (typeof type === 'undefined' || !type) return;
+
+      const position = reactFlowInstance
+        ? reactFlowInstance.screenToFlowPosition({
+            x: event.clientX,
+            y: event.clientY,
+          })
+        : { x: event.clientX, y: event.clientY };
+
+      const newNode: Node = {
+        id: `${type}-${Date.now()}`,
+        type,
+        position,
+        data: { label },
+      };
+
+      setNodes((nds) => nds.concat(newNode));
+      setTimeout(onGraphChange, 50);
+    },
+    [reactFlowInstance, setNodes, onGraphChange],
+  );
+
+  const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
+    setSelectedNode(node);
+  }, []);
+
+  const updateNodeData = (key: string, value: any) => {
+    if (!selectedNode) return;
+    setNodes((nds) =>
+      nds.map((node) => {
+        if (node.id === selectedNode.id) {
+          const newData = { ...node.data, [key]: value };
+          setSelectedNode({ ...node, data: newData });
+          return { ...node, data: newData };
+        }
+        return node;
+      })
+    );
+    // Debounce manual o wait para update
+    setTimeout(onGraphChange, 50);
+  };
+
+  const deleteSelectedNode = () => {
+    if (!selectedNode) return;
+    setNodes((nds) => nds.filter((n) => n.id !== selectedNode.id));
+    setSelectedNode(null);
+    setTimeout(onGraphChange, 50);
   };
 
   const handleFileSelect = (id: string) => {
@@ -677,57 +618,12 @@ export default function EditorPage() {
      });
   };
 
-  const onDragOver = useCallback((event: React.DragEvent) => {
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
-  }, []);
-
-  const onDrop = useCallback(
-    (event: React.DragEvent) => {
-      event.preventDefault();
-
-      const type = event.dataTransfer.getData('application/reactflow/type');
-      const label = event.dataTransfer.getData('application/reactflow/label');
-
-      if (typeof type === 'undefined' || !type) return;
-
-      const position = reactFlowInstance.screenToFlowPosition({
-        x: event.clientX,
-        y: event.clientY,
-      });
-
-      const newNode: Node = {
-        id: `${type}-${Date.now()}`,
-        type,
-        position,
-        data: { label },
-      };
-
-      setNodes((nds) => nds.concat(newNode));
-    },
-    [reactFlowInstance, setNodes],
-  );
-
-  const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
-    setSelectedNode(node);
-  }, []);
-
-  const deleteSelectedNode = () => {
-    if (!selectedNode) return;
-    setNodes((nds) => nds.filter((n) => n.id !== selectedNode.id));
-    setSelectedNode(null);
-  };
-
   const handleMenuAction = (action: string) => {
-      toast({
-          title: action,
-          description: "Función simulada para demostración.",
-      });
+      toast({ title: action, description: "Función simulada." });
   };
 
   return (
     <div className="flex flex-col h-screen w-full bg-[#1e1e1e] overflow-hidden text-gray-200 font-sans selection:bg-[#007fd4] selection:text-white">
-      {/* Top Bar (Unreal Style) */}
       <header className="h-10 border-b border-[#2a2a2a] bg-[#1e1e1e] flex items-center justify-between px-3 shrink-0">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
@@ -744,46 +640,7 @@ export default function EditorPage() {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent className="bg-[#252526] border-[#3e3e42] text-gray-300">
                     <DropdownMenuItem onClick={() => handleMenuAction('Nuevo Proyecto')}>Nuevo Proyecto</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleMenuAction('Abrir Proyecto')}>Abrir...</DropdownMenuItem>
-                    <DropdownMenuSeparator className="bg-[#3e3e42]" />
                     <DropdownMenuItem onClick={() => handleMenuAction('Guardar')}>Guardar</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleMenuAction('Exportar')}>Exportar como ZIP</DropdownMenuItem>
-                </DropdownMenuContent>
-             </DropdownMenu>
-
-             <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="sm" className="h-6 text-xs text-gray-400 hover:text-white hover:bg-[#2a2a2a]">Editar</Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent className="bg-[#252526] border-[#3e3e42] text-gray-300">
-                    <DropdownMenuItem onClick={() => handleMenuAction('Deshacer')}>Deshacer</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleMenuAction('Rehacer')}>Rehacer</DropdownMenuItem>
-                    <DropdownMenuSeparator className="bg-[#3e3e42]" />
-                    <DropdownMenuItem onClick={() => handleMenuAction('Cortar')}>Cortar</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleMenuAction('Copiar')}>Copiar</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleMenuAction('Pegar')}>Pegar</DropdownMenuItem>
-                </DropdownMenuContent>
-             </DropdownMenu>
-
-             <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="sm" className="h-6 text-xs text-gray-400 hover:text-white hover:bg-[#2a2a2a]">Ventana</Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent className="bg-[#252526] border-[#3e3e42] text-gray-300">
-                    <DropdownMenuItem onClick={() => setViewMode('visual')}>Vista Visual</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setViewMode('code')}>Vista Código</DropdownMenuItem>
-                    <DropdownMenuSeparator className="bg-[#3e3e42]" />
-                    <DropdownMenuItem onClick={() => handleMenuAction('Resetear Layout')}>Restaurar Paneles</DropdownMenuItem>
-                </DropdownMenuContent>
-             </DropdownMenu>
-
-             <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="sm" className="h-6 text-xs text-gray-400 hover:text-white hover:bg-[#2a2a2a]">Ayuda</Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent className="bg-[#252526] border-[#3e3e42] text-gray-300">
-                    <DropdownMenuItem onClick={() => handleMenuAction('Documentación')}>Documentación</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => handleMenuAction('Acerca de')}>Acerca de LuaVisual</DropdownMenuItem>
                 </DropdownMenuContent>
              </DropdownMenu>
           </div>
@@ -822,11 +679,8 @@ export default function EditorPage() {
         </div>
       </header>
 
-      {/* Main Content Area */}
       <div className="flex-1 flex overflow-hidden">
         <ResizablePanelGroup direction="horizontal">
-          
-          {/* Left Sidebar (File Explorer & Toolbox) */}
           <ResizablePanel defaultSize={20} minSize={15} maxSize={25} className="bg-[#151515]">
              <ResizablePanelGroup direction="vertical">
                 <ResizablePanel defaultSize={40} minSize={20}>
@@ -846,10 +700,8 @@ export default function EditorPage() {
 
           <ResizableHandle className="bg-[#2a2a2a]" />
 
-          {/* Center Canvas */}
           <ResizablePanel defaultSize={55} minSize={30} className="bg-[#111]">
             <div className="h-full flex flex-col">
-               {/* Tab Bar */}
                <div className="h-8 bg-[#1e1e1e] border-b border-[#2a2a2a] flex items-center">
                   {files.filter(f => f.active).map(f => (
                     <div key={f.id} className="h-full px-4 flex items-center gap-2 bg-[#1e1e1e] border-r border-[#2a2a2a] text-xs text-blue-400 border-t-2 border-t-blue-500">
@@ -858,7 +710,6 @@ export default function EditorPage() {
                   ))}
                </div>
                
-               {/* Content based on View Mode */}
                {viewMode === 'visual' ? (
                  <div className="flex-1 relative" ref={reactFlowWrapper}>
                     <ReactFlowProvider>
@@ -909,7 +760,6 @@ export default function EditorPage() {
 
           <ResizableHandle className="bg-[#2a2a2a]" />
 
-          {/* Right Panel (Details & Preview) */}
           <ResizablePanel defaultSize={25} minSize={20} maxSize={35} className="bg-[#1e1e1e]">
              {viewMode === 'visual' ? (
                <>
@@ -927,9 +777,6 @@ export default function EditorPage() {
                    <p className="text-xs text-gray-500 max-w-[200px] leading-relaxed">
                      Estás editando el código fuente directamente.
                    </p>
-                   <div className="mt-6 p-3 bg-amber-900/10 border border-amber-900/30 rounded text-amber-500 text-xs text-left w-full">
-                      <strong>Nota:</strong> Los cambios realizados aquí pueden no reflejarse perfectamente en el modo visual al regresar, ya que el parser es experimental.
-                   </div>
                 </div>
              )}
           </ResizablePanel>
@@ -937,16 +784,10 @@ export default function EditorPage() {
         </ResizablePanelGroup>
       </div>
       
-      {/* Footer Status Bar */}
       <footer className="h-6 bg-[#007fd4] flex items-center px-2 justify-between shrink-0">
          <div className="flex items-center gap-4 text-[10px] text-white font-medium">
             <span>LISTO</span>
             <span>{activeFile.type.toUpperCase()} MODE</span>
-         </div>
-         <div className="flex items-center gap-4 text-[10px] text-white">
-            <span>Ln 1, Col 1</span>
-            <span>UTF-8</span>
-            <span>Lua</span>
          </div>
       </footer>
     </div>
