@@ -214,47 +214,125 @@ export default function EditorPage() {
   }, []);
 
   const generateLuaCode = (currentNodes: Node[], currentEdges: Edge[]) => {
-    // 1. RECUPERAR EL ENCABEZADO (Si existe en el archivo activo, úsalo. Si no, usa default)
+    // 1. HEADER: Usar el encabezado preservado o uno por defecto si es archivo nuevo
     let code = activeFile.headerCode 
-        ? activeFile.headerCode + '\n\n' 
+        ? activeFile.headerCode.trim() + '\n\n' 
         : `-- Generado por LuaForge\nlocal QBCore = exports['qb-core']:GetCoreObject()\n\n`;
-    
-    // 2. ORDENAR NODOS POR POSICIÓN Y (De arriba a abajo)
-    const sortedNodes = [...currentNodes].sort((a, b) => a.position.y - b.position.y);
 
-    sortedNodes.forEach(node => {
-        // --- COMANDOS ---
-        if (node.type === 'event-start' || node.type === 'qb-command') {
+    // 2. ORDENAR: Encontrar nodos raíz (Eventos/Comandos) y ordenarlos por posición vertical
+    const startNodes = currentNodes.filter(n => 
+        typeof n.type === 'string' && ['event-start', 'register-net', 'register-key-mapping', 'qb-command', 'thread-create'].includes(n.type)
+    ).sort((a, b) => a.position.y - b.position.y);
+
+    // --- FUNCIÓN RECURSIVA PARA GENERAR CUERPO ---
+    const generateBody = (parentId: string, indent: string): string => {
+        let block = '';
+        
+        // Buscar hijos conectados a 'flow-out' o 'true'
+        const connectedEdges = currentEdges.filter(e => e.source === parentId);
+        
+        // Ordenar hijos por posición X (izquierda a derecha) para mantener secuencia lógica
+        const childNodes = connectedEdges
+            .map(e => ({ 
+                node: currentNodes.find(n => n.id === e.target), 
+                handle: e.sourceHandle 
+            }))
+            .filter(item => item.node)
+            .sort((a, b) => (a.node!.position.x - b.node!.position.x));
+
+        for (const { node, handle } of childNodes) {
+            if (!node) continue;
+            
+            // Ignorar caminos 'false' aquí (se manejan dentro de su padre IF)
+            if (handle === 'false') continue;
+
+            // SI EL NODO TIENE CÓDIGO PRESERVADO, USARLO PRIORITARIAMENTE
+            // Esto evita que "app:GetPlayerId()" se convierta en "-- Script"
+            if (node.data.codeBlock && node.type !== 'logic-if') {
+                block += `${indent}${node.data.codeBlock}\n`;
+                continue; // Saltamos a la siguiente iteración, ya escribimos la línea exacta
+            }
+
+            // SI NO TIENE CÓDIGO PRESERVADO, GENERAMOS SEGÚN TIPO
+            switch (node.type) {
+                case 'logic-if':
+                    block += `${indent}if ${node.data.condition || 'true'} then\n`;
+                    // Recursión para camino VERDADERO
+                    block += generateBody(node.id, indent + '    ');
+                    
+                    // Buscar camino FALSO
+                    const falseEdge = currentEdges.find(e => e.source === node.id && e.sourceHandle === 'false');
+                    if (falseEdge) {
+                        const falseNode = currentNodes.find(n => n.id === falseEdge.target);
+                        if (falseNode) {
+                            block += `${indent}else\n`;
+                            // Si el nodo del else tiene código preservado, úsalo
+                            if (falseNode.data.codeBlock) {
+                                block += `${indent}    ${falseNode.data.codeBlock}\n`;
+                            } else {
+                                // O generar recursivamente si es un bloque visual
+                                // (Simplificación: asumimos bloque simple para else por ahora)
+                                block += `${indent}    -- Lógica Else\n`; 
+                            }
+                        }
+                    }
+                    block += `${indent}end\n`;
+                    break;
+
+                case 'native-control':
+                    // Fallback si no había codeBlock
+                    block += `${indent}${node.data.label}()\n`;
+                    break;
+
+                case 'qb-notify':
+                    block += `${indent}QBCore.Functions.Notify('${node.data.message}', '${node.data.notifyType || 'success'}')\n`;
+                    break;
+
+                case 'logic-print':
+                    block += `${indent}print('${node.data.message}')\n`;
+                    break;
+                
+                case 'qb-trigger-callback':
+                     // Si perdimos el bloque interno, intentamos reconstruir uno genérico
+                     // Pero idealmente el parser ya guardó el bloque entero en 'codeBlock' arriba
+                     block += `${indent}QBCore.Functions.TriggerCallback('${node.data.eventName}', function(result)\n`;
+                     block += `${indent}    -- Callback logic needs to be rewritten manually if lost\n`;
+                     block += `${indent}end)\n`;
+                     break;
+
+                default:
+                    block += `${indent}-- ${node.data.label}\n`;
+            }
+        }
+        return block;
+    };
+
+    // --- GENERACIÓN DE BLOQUES PRINCIPALES ---
+    startNodes.forEach(node => {
+        // 1. REGISTER COMMAND
+        if (node.type === 'event-start') {
             const cmdName = node.data.eventName || 'comando';
+            // Usar argumentos originales si existen, o default
             const args = node.data.args || 'source, args';
             
-            // Si tiene código custom guardado, úsalo. Si no, genera estructura vacía.
-            const body = node.data.codeBlock 
-                ? node.data.codeBlock 
-                : `    print('Comando ${cmdName} ejecutado')`;
-
             code += `RegisterCommand('${cmdName}', function(${args})\n`;
-            code += `    ${body}\n`; // Inyectamos el cuerpo preservado
+            code += generateBody(node.id, '    ');
             code += `end, false)\n\n`;
-        }
-        
-        // --- EVENTOS DE RED ---
+        } 
+        // 2. REGISTER NET EVENT
         else if (node.type === 'register-net') {
-            const rawName = node.data.eventName;
-            // Detectar si es string literal o variable
-            const finalName = (rawName && (rawName.includes("'") || rawName.includes('"') || rawName.includes(".."))) 
-                ? rawName 
-                : `'${rawName || 'net:event'}'`;
-                
-            const args = node.data.args || '';
-            const body = node.data.codeBlock || `    print('Evento recibido')`;
+            // Manejo inteligente de nombres de evento (strings vs variables)
+            let evtName = node.data.eventName || 'net:event';
+            const isVariable = evtName.includes('..') || !evtName.match(/^['"]|['"]$/);
+            const finalName = isVariable ? evtName : `'${evtName}'`;
+            
+            const args = node.data.args || ''; // Argumentos del evento (ej: data)
 
             code += `RegisterNetEvent(${finalName}, function(${args})\n`;
-            code += `    ${body}\n`;
+            code += generateBody(node.id, '    ');
             code += `end)\n\n`;
         }
-
-        // --- KEY MAPPINGS ---
+        // 3. KEY MAPPING
         else if (node.type === 'register-key-mapping') {
             const { commandName, description, defaultKey } = node.data;
             code += `RegisterKeyMapping('${commandName}', '${description}', 'keyboard', '${defaultKey}')\n\n`;
@@ -263,7 +341,7 @@ export default function EditorPage() {
 
     setGeneratedCode(code);
     
-    // Guardar cambio
+    // Guardar cambios en memoria sin disparar un re-render infinito
     if (!isSyncing) {
         setFiles(prev => prev.map(f => f.id === activeFile.id ? { ...f, content: code } : f));
     }
@@ -371,79 +449,194 @@ export default function EditorPage() {
     const code = generatedCode;
     const newNodes: Node[] = [];
     const newEdges: Edge[] = [];
-    let yPos = 100;
-
-    // 1. EXTRAER ENCABEZADO (Header Preservation)
-    // Buscamos dónde empieza el primer evento/comando registrado para separar la lógica global
-    const firstBlockIndex = code.search(/(?:RegisterCommand|RegisterNetEvent|RegisterKeyMapping|QBCore\.Commands\.Add)/);
     
-    let headerCode = '';
-    if (firstBlockIndex !== -1) {
-        headerCode = code.substring(0, firstBlockIndex).trim();
-    } else {
-        headerCode = '-- No se detectaron eventos, todo es código global\n' + code;
+    // --- 1. SEPARACIÓN INTELIGENTE DE ENCABEZADO ---
+    // Detectamos dónde empieza la "Acción" (Comandos, Eventos, Hilos)
+    // Todo lo anterior (Clases, Funciones Helper, Variables) se guarda como Header.
+    const actionKeywords = [
+        'RegisterCommand', 'RegisterNetEvent', 'RegisterKeyMapping', 
+        'QBCore.Commands.Add', 'CreateThread', 'AddEventHandler'
+    ];
+    
+    const lines = code.split('\n');
+    let firstActionIndex = -1;
+
+    for (let i = 0; i < lines.length; i++) {
+        const trimmed = lines[i].trim();
+        if (actionKeywords.some(kw => trimmed.startsWith(kw))) {
+            firstActionIndex = i;
+            break;
+        }
     }
 
-    // Helper para nodos
-    const createNode = (type: string, label: string, data: any, x: number, y: number) => {
-        const id = `${type}-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+    let headerCode = '';
+    let bodyCodeLines: string[] = [];
+
+    if (firstActionIndex !== -1) {
+        headerCode = lines.slice(0, firstActionIndex).join('\n').trim();
+        bodyCodeLines = lines.slice(firstActionIndex);
+    } else {
+        headerCode = code; // Todo es header si no hay eventos
+    }
+
+    // --- 2. MAQUINA DE ESTADOS PARA PARSEO ---
+    let parentStack: { id: string; x: number; y: number }[] = [];
+    let currentY = 100;
+    let rootX = 100;
+
+    // Helper para crear nodos
+    const addNode = (type: string, label: string, data: any, x: number, y: number) => {
+        const id = `${type}-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
         newNodes.push({ id, type, data: { label, ...data }, position: { x, y } });
         return id;
     };
 
-    // 2. ANALIZAR COMANDOS Y GUARDAR SU CUERPO EXACTO
-    const cmdBlockRegex = /(?:RegisterCommand|QBCore\.Commands\.Add)\s*\(\s*['"]([^'"]+)['"]\s*,\s*function\s*\(([^)]*)\)([\s\S]*?)end\s*,\s*(?:false|true)\s*\)/g;
-    let match;
-    
-    while ((match = cmdBlockRegex.exec(code)) !== null) {
-        const cmdName = match[1];
-        const args = match[2]; // source, args
-        const bodyContent = match[3].trim(); // El código dentro de la función
+    // Helper para conectar
+    const linkNodes = (source: string, target: string, handle = 'flow-out') => {
+        newEdges.push({
+            id: `e-${source}-${target}`,
+            source, target, 
+            sourceHandle: handle, targetHandle: 'flow-in'
+        });
+    };
 
-        // Creamos el nodo guardando el "codeBlock" original
-        createNode('event-start', `Comando: ${cmdName}`, { 
-            eventName: cmdName,
-            args: args,
-            codeBlock: bodyContent // <--- ESTO ES LA CLAVE
-        }, 100, yPos);
+    // Analizamos el cuerpo línea por línea
+    for (let i = 0; i < bodyCodeLines.length; i++) {
+        const line = bodyCodeLines[i].trim();
+        if (!line || line.startsWith('--')) continue; // Ignorar vacíos y comentarios simples
+
+        // --- DETECTAR BLOQUES PRINCIPALES (Roots) ---
         
-        yPos += 250;
+        // COMANDOS
+        const cmdMatch = line.match(/(?:RegisterCommand|QBCore\.Commands\.Add)\s*\(\s*['"]([^'"]+)['"]/);
+        if (cmdMatch) {
+            const cmdId = addNode('event-start', `Comando: ${cmdMatch[1]}`, { eventName: cmdMatch[1] }, rootX, currentY);
+            parentStack = [{ id: cmdId, x: rootX, y: currentY }]; // Inicia nuevo stack
+            currentY += 150; // Espacio vertical para el siguiente bloque root
+            continue;
+        }
+
+        // EVENTOS DE RED
+        const netMatch = line.match(/RegisterNetEvent\s*\(\s*(.+?)\s*,/);
+        if (netMatch) {
+            // Limpiar nombre (quitar concatenaciones complejas visualmente)
+            const cleanName = netMatch[1].replace(/app\.resourceName\s*\.\.\s*/, '').replace(/['":]/g, '');
+            const evtId = addNode('register-net', `Net: ${cleanName}`, { eventName: netMatch[1] }, rootX, currentY);
+            parentStack = [{ id: evtId, x: rootX, y: currentY }];
+            currentY += 150;
+            continue;
+        }
+
+        // KEY MAPPINGS (Son nodos sueltos, sin hijos usualmente)
+        const keyMatch = line.match(/RegisterKeyMapping\s*\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]/);
+        if (keyMatch) {
+            addNode('register-key-mapping', `Tecla: ${keyMatch[4]}`, { 
+                commandName: keyMatch[1], description: keyMatch[2], defaultKey: keyMatch[4] 
+            }, rootX, currentY);
+            currentY += 100;
+            continue;
+        }
+
+        // --- DETECTAR LÓGICA INTERNA (Hijos) ---
+        if (parentStack.length > 0) {
+            const parent = parentStack[parentStack.length - 1];
+            // Calculamos posición relativa al padre (escalonada a la derecha)
+            const childX = parent.x + 350; 
+            const childY = parent.y; // Misma altura base, el layout automático podría mejorar esto
+
+            let nodeId: string | null = null;
+
+            // 1. CONDICIONALES (IF)
+            if (line.startsWith('if ')) {
+                const condition = line.replace('if ', '').replace(' then', '');
+                nodeId = addNode('logic-if', 'Condición IF', { condition }, childX, childY);
+                linkNodes(parent.id, nodeId);
+                
+                // El IF se convierte en el nuevo padre temporal para lo que haya dentro
+                parentStack.push({ id: nodeId, x: childX, y: childY });
+                continue;
+            }
+            // FIN DE BLOQUE (end)
+            else if (line === 'end' || line.startsWith('end)')) {
+                if (parentStack.length > 1) {
+                    parentStack.pop(); // Salimos del bloque actual (ej. salimos del IF)
+                }
+                continue;
+            }
+            // ELSE
+            else if (line.startsWith('else')) {
+                // En una implementación visual simple, 'else' es difícil de representar linealmente sin un grafo complejo.
+                // Por ahora, lo tratamos como parte del flujo del IF padre actual.
+                continue;
+            }
+
+            // 2. LLAMADAS A TU CLASE (OOP)
+            // Detecta: app:Metodo() o self:Metodo()
+            else if (line.match(/\b(app|self):([a-zA-Z0-9_]+)\s*\(/)) {
+                const callMatch = line.match(/\b(app|self):([a-zA-Z0-9_]+)/);
+                const funcName = callMatch ? callMatch[2] : 'Método';
+                const objectName = callMatch ? callMatch[1] : 'app';
+                
+                nodeId = addNode('native-control', `Call: ${objectName}:${funcName}`, { 
+                    label: `${objectName}:${funcName}`,
+                    codeBlock: line // Guardamos la línea exacta para no perder argumentos
+                }, childX, childY);
+            }
+
+            // 3. CALLBACKS DE QBCORE
+            else if (line.includes('TriggerCallback')) {
+                const cbMatch = line.match(/['"]([^'"]+)['"]/);
+                const cbName = cbMatch ? cbMatch[1] : 'Callback';
+                nodeId = addNode('qb-trigger-callback', `Callback: ${cbName}`, { eventName: cbName }, childX, childY);
+            }
+
+            // 4. NOTIFICACIONES
+            else if (line.includes('Notify')) {
+                const msgMatch = line.match(/['"]([^'"]+)['"]/);
+                nodeId = addNode('qb-notify', 'Notificación', { 
+                    message: msgMatch ? msgMatch[1] : 'Alerta',
+                    notifyType: line.includes('error') ? 'error' : 'success'
+                }, childX, childY);
+            }
+
+            // 5. PRINTS (DEBUG)
+            else if (line.startsWith('print')) {
+                const pMatch = line.match(/\(([^)]+)\)/);
+                nodeId = addNode('logic-print', 'Debug Print', { 
+                    message: pMatch ? pMatch[1].replace(/['"]/g, '') : 'log'
+                }, childX, childY);
+            }
+
+            // 6. CÓDIGO GENÉRICO (Cualquier otra cosa)
+            else {
+                // Si no reconocemos la línea, creamos un nodo genérico de código para NO PERDERLA.
+                nodeId = addNode('native-control', 'Lua Code', { 
+                    label: 'Script',
+                    codeBlock: line 
+                }, childX, childY);
+            }
+
+            // Conectar el nuevo nodo y actualizar la posición del padre para el siguiente hijo
+            if (nodeId) {
+                // Si el padre es un IF, decidimos si conectamos a True o False (por defecto True)
+                const handle = parentStack[parentStack.length - 1].id.includes('logic-if') ? 'true' : 'flow-out';
+                linkNodes(parent.id, nodeId, handle);
+                
+                // Actualizamos el puntero del stack para encadenar (flujo lineal)
+                // OJO: Si estamos DENTRO de un IF, no reemplazamos el padre, sino que seguimos añadiendo al IF.
+                // Pero para visualización lineal (tipo Unreal Blueprints), solemos encadenar nodos.
+                // Aquí usamos una lógica híbrida: encadenamos visualmente.
+                
+                // Reemplazamos el último elemento del stack con este nuevo nodo, 
+                // A MENOS que sea un contenedor (como IF) que ya manejamos arriba.
+                parentStack[parentStack.length - 1] = { id: nodeId, x: childX, y: childY };
+            }
+        }
     }
 
-    // 3. ANALIZAR EVENTOS DE RED Y SU CUERPO
-    const netEventRegex = /RegisterNetEvent\s*\(\s*([^,]+)\s*,\s*function\s*\(([^)]*)\)([\s\S]*?)end\s*\)/g;
-    while ((match = netEventRegex.exec(code)) !== null) {
-        let evtName = match[1].replace(/['"]/g, '').trim();
-        // Si el nombre es dinámico (ej: app.resourceName .. ':event'), lo guardamos tal cual
-        const rawName = match[1].trim(); 
-        const args = match[2];
-        const bodyContent = match[3].trim();
-
-        createNode('register-net', `Net: ${evtName.substring(0, 20)}...`, { 
-            eventName: rawName, // Guardamos el nombre crudo (con variables)
-            args: args,
-            codeBlock: bodyContent 
-        }, 100, yPos);
-
-        yPos += 250;
-    }
-
-    // 4. KEY MAPPINGS
-    const keyRegex = /RegisterKeyMapping\s*\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*\)/g;
-    while ((match = keyRegex.exec(code)) !== null) {
-        createNode('register-key-mapping', `Tecla: ${match[4]}`, { 
-            commandName: match[1], 
-            description: match[2],
-            defaultKey: match[4]
-        }, 100, yPos);
-        yPos += 150;
-    }
-
-    // ACTUALIZAR ESTADO
+    // Guardar todo
     setNodes(newNodes);
-    setEdges(newEdges); // En esta versión simplificada no creamos edges hijos para no romper el bloque de código
-    
-    // Guardamos el Header en el archivo
+    setEdges(newEdges);
     setFiles(prev => prev.map(f => {
         if (f.id === activeFile.id) {
             return { 
@@ -451,14 +644,19 @@ export default function EditorPage() {
                 nodes: newNodes, 
                 edges: newEdges, 
                 content: code,
-                headerCode: headerCode // <--- GUARDAMOS EL HEADER
+                headerCode: headerCode 
             };
         }
         return f;
     }));
 
-    toast({ title: "Código Importado", description: "Se ha preservado tu lógica custom." });
-    setViewMode('visual');
+    if (newNodes.length > 0) {
+        toast({ title: "Código Profesional Cargado", description: "Estructura lógica completa detectada." });
+        setViewMode('visual');
+    } else {
+        toast({ title: "Lienzo Limpio", description: "No se detectaron eventos principales." });
+    }
+    
     setTimeout(() => setIsSyncing(false), 500);
   };
 
@@ -708,14 +906,6 @@ export default function EditorPage() {
                       >
                         <Background color="#2a2a2a" gap={24} size={1} />
                         <Controls className="bg-[#2a2a2a] border-[#3e3e42] fill-gray-200" />
-                        
-                        <Panel position="top-center" className="bg-[#1e1e1e] border border-[#3e3e42] px-3 py-1 rounded-sm shadow-xl flex items-center gap-3">
-                           <Button size="icon" variant="ghost" className="h-6 w-6 text-green-500 hover:text-green-400 hover:bg-green-900/20">
-                              <Play className="w-4 h-4" />
-                           </Button>
-                           <div className="h-4 w-px bg-[#3e3e42]" />
-                           <span className="text-xs text-gray-400">Compilación en tiempo real: <span className="text-green-500">Activa</span></span>
-                        </Panel>
                       </ReactFlow>
                     </ReactFlowProvider>
                  </div>
