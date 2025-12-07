@@ -309,6 +309,7 @@ export default function EditorPage() {
   };
 
   // --- PARSER (LUA -> VISUAL) ---
+  // --- PARSER (LUA -> VISUAL) ---
   const applyCodeToVisual = () => {
     setIsSyncing(true);
     const code = generatedCode;
@@ -428,15 +429,18 @@ export default function EditorPage() {
             }
 
             // WAIT
-            if (line.startsWith('Wait(')) {
+            // Detecta Wait(2000) o Wait( 2000 )
+            if (line.match(/^Wait\s*\(\s*(\d+)\s*\)/)) {
                  const duration = line.match(/\d+/);
                  nodeId = addNode('wait', 'Esperar', { duration: duration ? duration[0] : 0 }, childX, childY);
             }
             // PRINT (Complex vs Simple)
             else if (line.startsWith('print')) {
                 if (line.includes(':format') || line.includes('%') || line.includes('..')) {
-                     // Guardar código crudo para preservar formato
-                     nodeId = addNode('native-control', 'Print (Format)', { codeBlock: line }, childX, childY);
+                     nodeId = addNode('native-control', 'Print (Format)', { 
+                         codeBlock: line,
+                         label: 'Print (Format)' 
+                     }, childX, childY);
                 } else {
                     const pMatch = line.match(/\(([^)]+)\)/);
                     const msg = pMatch ? pMatch[1].replace(/['"]/g, '') : 'log';
@@ -458,10 +462,19 @@ export default function EditorPage() {
                 nodeId = addNode('qb-trigger-callback', `Callback: ${cbName}`, { eventName: cbName }, childX, childY);
             }
             // GENERIC CODE
-            else {
+           else {
+                 // Intentar obtener un nombre mejor para el nodo
+                 let label = 'Script';
+                 if (line.startsWith('local ')) label = 'Variable';
+                 else if (line.includes('=')) label = 'Asignación';
+                 else if (line.includes(':') || line.includes('.')) label = 'Llamada';
+                 
+                 // Mostrar parte del código en la etiqueta para identificarlo
+                 const displayLabel = line.length > 25 ? line.substring(0, 22) + '...' : line;
+
                  nodeId = addNode('native-control', 'Lua Code', { 
-                    label: 'Script',
-                    codeBlock: line // Se guarda la línea cruda sin trim para preservar algo de formato si es necesario, aunque trim es mejor para visual
+                    label: displayLabel, // <--- AQUI ESTA LA CORRECCION DE NOMBRE
+                    codeBlock: line 
                 }, childX, childY);
             }
 

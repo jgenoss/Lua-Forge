@@ -46,7 +46,7 @@ export function PropertiesPanel({ selectedNode, onChange, onDelete }: Properties
           </div>
 
           <div className="space-y-1">
-            <Label htmlFor="label" className="text-xs text-gray-300">Etiqueta Personalizada</Label>
+            <Label htmlFor="label" className="text-xs text-gray-300">Etiqueta Visual</Label>
             <Input 
               id="label" 
               value={selectedNode.data.label} 
@@ -62,36 +62,27 @@ export function PropertiesPanel({ selectedNode, onChange, onDelete }: Properties
         <div className="space-y-4">
           <Label className="text-[10px] uppercase text-gray-500 font-bold">Parámetros</Label>
           
-          {(selectedNode.type.includes('event') || selectedNode.type === 'event-start') && (
+          {/* EVENTOS Y COMANDOS */}
+          {(selectedNode.type.includes('event') || selectedNode.type === 'event-start' || selectedNode.type === 'function-def' || selectedNode.type === 'register-net') && (
              <div className="space-y-1">
-               <Label htmlFor="eventName" className="text-xs text-gray-300">Nombre del Evento</Label>
+               <Label htmlFor="eventName" className="text-xs text-gray-300">Nombre (Evento/Función)</Label>
                <Input 
                  id="eventName" 
-                 placeholder="ej. qb-core:client:test" 
+                 placeholder="Nombre..." 
                  value={selectedNode.data.eventName || ''}
                  onChange={(e) => onChange('eventName', e.target.value)}
                  className="bg-[#252526] border-[#3e3e42] font-mono text-xs h-8 text-green-400"
                />
              </div>
           )}
-          {(selectedNode.type === 'event-start' || selectedNode.type === 'register-net') && (
-             <div className="space-y-1">
-               <Label className="text-xs text-gray-300">Lógica Interna (Lua)</Label>
-               <Textarea 
-                 value={selectedNode.data.codeBlock || ''}
-                 onChange={(e) => onChange('codeBlock', e.target.value)}
-                 className="bg-[#252526] border-[#3e3e42] font-mono text-xs min-h-[150px] text-gray-300"
-                 spellCheck={false}
-               />
-             </div>
-          )}
+
+          {/* NOTIFICACIONES */}
           {selectedNode.type.includes('notify') && (
              <>
                <div className="space-y-1">
                  <Label htmlFor="message" className="text-xs text-gray-300">Mensaje</Label>
                  <Textarea 
                    id="message" 
-                   placeholder="Texto de la notificación..." 
                    value={selectedNode.data.message || ''}
                    onChange={(e) => onChange('message', e.target.value)}
                    className="bg-[#252526] border-[#3e3e42] min-h-[60px] text-xs resize-none"
@@ -112,44 +103,79 @@ export function PropertiesPanel({ selectedNode, onChange, onDelete }: Properties
              </>
           )}
 
-          {selectedNode.type.includes('native') && (
-             <div className="space-y-1">
-               <Label htmlFor="args" className="text-xs text-gray-300">Argumentos (JSON array)</Label>
-               <Input 
-                 id="args" 
-                 placeholder="[1, 2, 3]" 
-                 className="bg-[#252526] border-[#3e3e42] font-mono text-xs h-8"
-               />
-             </div>
-          )}
-
-          {selectedNode.type.includes('logic-if') && (
+          {/* CONDICIONALES (IF) */}
+          {selectedNode.type === 'logic-if' && (
              <div className="space-y-1">
                <Label htmlFor="condition" className="text-xs text-gray-300">Condición (Lua)</Label>
                <Input 
                  id="condition" 
                  placeholder="x > 5" 
+                 value={selectedNode.data.condition || ''}
+                 onChange={(e) => onChange('condition', e.target.value)}
                  className="bg-[#252526] border-[#3e3e42] font-mono text-xs h-8 text-violet-400"
                />
              </div>
           )}
 
+          {/* WAIT */}
+          {selectedNode.type === 'wait' && (
+             <div className="space-y-1">
+               <Label htmlFor="duration" className="text-xs text-gray-300">Duración (ms)</Label>
+               <Input 
+                 id="duration" 
+                 type="number"
+                 placeholder="1000" 
+                 value={selectedNode.data.duration || 0}
+                 onChange={(e) => onChange('duration', e.target.value)}
+                 className="bg-[#252526] border-[#3e3e42] font-mono text-xs h-8 text-blue-400"
+               />
+             </div>
+          )}
+
+          {/* PRINTS */}
+          {selectedNode.type === 'logic-print' && (
+             <div className="space-y-1">
+               <Label htmlFor="message" className="text-xs text-gray-300">Mensaje de Consola</Label>
+               <Input 
+                 id="message" 
+                 placeholder="Debug..." 
+                 value={selectedNode.data.message || ''}
+                 onChange={(e) => onChange('message', e.target.value)}
+                 className="bg-[#252526] border-[#3e3e42] font-mono text-xs h-8 text-yellow-400"
+               />
+             </div>
+          )}
+
+          {/* CÓDIGO NATIVO / SCRIPT */}
+          {selectedNode.type === 'native-control' && (
+             <div className="space-y-1">
+               <Label className="text-xs text-gray-300">Código Lua (Línea)</Label>
+               <Textarea 
+                 value={selectedNode.data.codeBlock || ''}
+                 onChange={(e) => onChange('codeBlock', e.target.value)}
+                 className="bg-[#252526] border-[#3e3e42] font-mono text-xs min-h-[80px] text-gray-300"
+                 spellCheck={false}
+               />
+             </div>
+          )}
+
+          {/* KEY MAPPING */}
           {selectedNode.type === 'register-key-mapping' && (
              <>
                <div className="space-y-1">
-                 <Label className="text-xs text-gray-300">Nombre Comando</Label>
+                 <Label className="text-xs text-gray-300">Comando</Label>
                  <Input 
                    value={selectedNode.data.commandName || ''}
                    onChange={(e) => onChange('commandName', e.target.value)}
-                   className="..."
+                   className="bg-[#252526] border-[#3e3e42] h-8 text-xs"
                  />
                </div>
                <div className="space-y-1">
-                 <Label className="text-xs text-gray-300">Tecla Default</Label>
+                 <Label className="text-xs text-gray-300">Tecla</Label>
                  <Input 
                    value={selectedNode.data.defaultKey || 'E'}
                    onChange={(e) => onChange('defaultKey', e.target.value)}
-                   className="..."
+                   className="bg-[#252526] border-[#3e3e42] h-8 text-xs"
                  />
                </div>
                <div className="space-y-1">
@@ -157,7 +183,7 @@ export function PropertiesPanel({ selectedNode, onChange, onDelete }: Properties
                  <Input 
                    value={selectedNode.data.description || ''}
                    onChange={(e) => onChange('description', e.target.value)}
-                   className="..."
+                   className="bg-[#252526] border-[#3e3e42] h-8 text-xs"
                  />
                </div>
              </>
