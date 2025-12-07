@@ -40,7 +40,7 @@ import {
 const nodeTypes = {
   // Eventos y Funciones
   'event-start': CustomNode,
-  'function-def': CustomNode, // <--- NUEVO TIPO PARA FUNCIONES
+  'function-def': CustomNode, // <--- TIPO NECESARIO PARA TUS FUNCIONES
   'event-trigger': CustomNode,
   'event-net': CustomNode,
   'event-server': CustomNode,
@@ -136,7 +136,7 @@ export default function EditorPage() {
   
   const { toast } = useToast();
 
-  // Sync state when switching files
+  // Cargar estado al cambiar de archivo
   useEffect(() => {
     setNodes(activeFile.nodes);
     setEdges(activeFile.edges);
@@ -145,7 +145,7 @@ export default function EditorPage() {
     }
   }, [activeFile.id]);
 
-  // Cargar proyecto guardado
+  // Cargar proyecto desde localStorage al inicio
   useEffect(() => {
     const saved = localStorage.getItem('luaforge_project');
     if (saved) {
@@ -200,7 +200,7 @@ export default function EditorPage() {
         ? activeFile.headerCode + '\n\n' 
         : `-- Generado por LuaForge\nlocal QBCore = exports['qb-core']:GetCoreObject()\n\n`;
 
-    // Filtramos los nodos raíz (Inicios de flujo)
+    // Filtramos los nodos raíz
     const startNodes = currentNodes.filter(n => 
         typeof n.type === 'string' && ['event-start', 'register-net', 'register-key-mapping', 'qb-command', 'thread-create', 'function-def'].includes(n.type)
     ).sort((a, b) => a.position.y - b.position.y);
@@ -219,7 +219,7 @@ export default function EditorPage() {
         for (const edge of connections) {
             const node = currentNodes.find(n => n.id === edge.target);
             if (!node) continue;
-            if (edge.sourceHandle === 'false') continue; // Ignoramos 'else' aquí
+            if (edge.sourceHandle === 'false') continue; // El 'else' se maneja en el padre
 
             switch (node.type) {
                 case 'logic-if':
@@ -241,7 +241,10 @@ export default function EditorPage() {
                 case 'native-control':
                 case 'create-ped': 
                     if (node.data.codeBlock) {
-                        block += `${indent}${node.data.codeBlock}\n`;
+                        const lines = node.data.codeBlock.split('\n');
+                        lines.forEach((line: string) => {
+                             block += `${indent}${line.trim()}\n`;
+                        });
                     } else if (node.data.label && node.data.label.includes('Call:')) {
                          block += `${indent}${node.data.label.replace('Call: ', '')}\n`;
                     } else {
@@ -263,7 +266,6 @@ export default function EditorPage() {
                      break;
 
                 case 'logic-print':
-                    // Si tiene formato complejo, no poner comillas
                     if (node.data.message.includes('%') || node.data.message.includes('..')) {
                         block += `${indent}print(${node.data.message})\n`;
                     } else {
@@ -283,7 +285,7 @@ export default function EditorPage() {
 
     startNodes.forEach(node => {
         if (node.type === 'function-def') {
-            code += `function ${node.data.eventName}()\n`; // Escribe function X()
+            code += `function ${node.data.eventName}()\n`; 
             code += generateBlock(node.id, '    ');
             code += `end\n\n`;
         }
@@ -308,7 +310,6 @@ export default function EditorPage() {
     setFiles(prev => prev.map(f => f.id === activeFile.id ? { ...f, content: code } : f));
   };
 
-  // --- PARSER (LUA -> VISUAL) ---
   // --- PARSER (LUA -> VISUAL) ---
   const applyCodeToVisual = () => {
     setIsSyncing(true);
@@ -405,7 +406,6 @@ export default function EditorPage() {
             continue;
         }
 
-        // LÓGICA HIJA
         if (parentStack.length > 0) {
             const parent = parentStack[parentStack.length - 1];
             const childX = parent.x + 350; 
@@ -422,24 +422,28 @@ export default function EditorPage() {
                 continue;
             }
             
-            // END BLOCK
-            if (line === 'end' || line.startsWith('end)')) {
+            // DETECCIÓN DE CIERRE DE BLOQUE (CORREGIDA)
+            // Detecta 'end', 'end)', 'end, false)'
+            if (line.startsWith('end')) {
                 if (parentStack.length > 0) parentStack.pop();
                 continue;
             }
 
             // WAIT
-            // Detecta Wait(2000) o Wait( 2000 )
-            if (line.match(/^Wait\s*\(\s*(\d+)\s*\)/)) {
+            if (line.startsWith('Wait(')) {
                  const duration = line.match(/\d+/);
                  nodeId = addNode('wait', 'Esperar', { duration: duration ? duration[0] : 0 }, childX, childY);
             }
             // PRINT (Complex vs Simple)
             else if (line.startsWith('print')) {
                 if (line.includes(':format') || line.includes('%') || line.includes('..')) {
-                     nodeId = addNode('native-control', 'Print (Format)', { 
-                         codeBlock: line,
-                         label: 'Print (Format)' 
+                     // Extraer el contenido dentro de print(...) para mostrarlo mejor en el editor
+                     const contentMatch = line.match(/^print\((.*)\)$/);
+                     const displayContent = contentMatch ? contentMatch[1] : line;
+                     
+                     nodeId = addNode('logic-print', 'Print (Format)', { 
+                         message: displayContent, // Usamos message para guardar el contenido crudo en este caso especial
+                         codeBlock: line
                      }, childX, childY);
                 } else {
                     const pMatch = line.match(/\(([^)]+)\)/);
@@ -455,25 +459,15 @@ export default function EditorPage() {
                     notifyType: line.includes('error') ? 'error' : 'success'
                 }, childX, childY);
             }
-            // CALLBACKS
-            else if (line.includes('TriggerCallback')) {
-                const cbMatch = line.match(/['"]([^'"]+)['"]/);
-                const cbName = cbMatch ? cbMatch[1] : 'Callback';
-                nodeId = addNode('qb-trigger-callback', `Callback: ${cbName}`, { eventName: cbName }, childX, childY);
-            }
             // GENERIC CODE
-           else {
-                 // Intentar obtener un nombre mejor para el nodo
+            else {
                  let label = 'Script';
-                 if (line.startsWith('local ')) label = 'Variable';
-                 else if (line.includes('=')) label = 'Asignación';
-                 else if (line.includes(':') || line.includes('.')) label = 'Llamada';
+                 // Intentar dar nombres más útiles
+                 if (line.startsWith('local ')) label = line.split('=')[0].replace('local', '').trim();
+                 else if (line.includes(':')) label = 'Llamada';
                  
-                 // Mostrar parte del código en la etiqueta para identificarlo
-                 const displayLabel = line.length > 25 ? line.substring(0, 22) + '...' : line;
-
-                 nodeId = addNode('native-control', 'Lua Code', { 
-                    label: displayLabel, // <--- AQUI ESTA LA CORRECCION DE NOMBRE
+                 nodeId = addNode('native-control', label, { 
+                    label: label,
                     codeBlock: line 
                 }, childX, childY);
             }
@@ -481,7 +475,13 @@ export default function EditorPage() {
             if (nodeId) {
                 const handle = parentStack[parentStack.length - 1].id.includes('logic-if') ? 'true' : 'flow-out';
                 linkNodes(parent.id, nodeId, handle);
-                parentStack[parentStack.length - 1] = { id: nodeId, x: childX, y: childY };
+                // No anidamos native-control ni prints en el stack visual (flujo lineal)
+                if (!nodeId.includes('native-control') && !nodeId.includes('print')) {
+                   // parentStack.push... (Solo si fueran contenedores)
+                }
+                // Pero para mantener la posición Y correcta para el siguiente, actualizamos el "último nodo" visualmente
+                // En este parser simple, usamos el stack para anidamiento lógico.
+                // Para flujo secuencial, simplemente añadimos al mismo padre.
             }
         }
     }
@@ -517,7 +517,7 @@ export default function EditorPage() {
     }));
   };
 
-  // --- MANEJO DE CAMBIOS SEGURO ---
+  // --- MANEJO DE CAMBIOS SEGURO (SIN useEffect) ---
   const onGraphChange = useCallback(() => {
     if (isSyncing) return;
     generateLuaCode(nodes, edges);
@@ -530,11 +530,12 @@ export default function EditorPage() {
     }));
   }, [nodes, edges, isSyncing, activeFile.id]);
 
-  // Solo guardar al soltar un nodo
+  // Solo guardar al soltar un nodo (Drag Stop)
   const onNodeDragStop = useCallback(() => {
     onGraphChange();
   }, [onGraphChange]);
 
+  // Guardar al conectar
   const onConnect = useCallback(
     (params: Connection) => {
       setEdges((eds) => addEdge(params, eds));
@@ -543,28 +544,22 @@ export default function EditorPage() {
     [setEdges, onGraphChange],
   );
 
-  const onDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+  const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
   }, []);
 
   const onDrop = useCallback(
-    (event: React.DragEvent<HTMLDivElement>) => {
+    (event: React.DragEvent) => {
       event.preventDefault();
-
-      const dataTransfer = event.dataTransfer;
-      if (!dataTransfer) return; // Protección: event.dataTransfer puede ser null en algunos navegadores/escenarios
-
-      const type = dataTransfer.getData('application/reactflow/type');
-      const label = dataTransfer.getData('application/reactflow/label');
+      const type = event.dataTransfer.getData('application/reactflow/type');
+      const label = event.dataTransfer.getData('application/reactflow/label');
       if (typeof type === 'undefined' || !type) return;
 
-      const position = reactFlowInstance
-        ? reactFlowInstance.screenToFlowPosition({
-            x: event.clientX,
-            y: event.clientY,
-          })
-        : { x: event.clientX, y: event.clientY };
+      const position = reactFlowInstance.screenToFlowPosition({
+        x: event.clientX,
+        y: event.clientY,
+      });
 
       const newNode: Node = {
         id: `${type}-${Date.now()}`,
@@ -581,6 +576,7 @@ export default function EditorPage() {
 
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
     setSelectedNode(node);
+    // ¡NO LLAMAMOS A onGraphChange AQUÍ!
   }, []);
 
   const updateNodeData = (key: string, value: any) => {
@@ -595,8 +591,8 @@ export default function EditorPage() {
         return node;
       })
     );
-    // Debounce manual o wait para update
-    setTimeout(onGraphChange, 50);
+    // Guardamos solo al editar propiedades
+    setTimeout(onGraphChange, 500); // Debounce un poco mayor para texto
   };
 
   const deleteSelectedNode = () => {
