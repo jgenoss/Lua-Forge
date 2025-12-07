@@ -214,137 +214,127 @@ export default function EditorPage() {
   }, []);
 
   const generateLuaCode = (currentNodes: Node[], currentEdges: Edge[]) => {
-    // 1. HEADER: Usar el encabezado preservado o uno por defecto si es archivo nuevo
+    if (isSyncing) return; // Evitar bucles infinitos durante el parseo
+
+    // 1. HEADER: Usamos el que guardamos o uno por defecto si es nuevo
     let code = activeFile.headerCode 
-        ? activeFile.headerCode.trim() + '\n\n' 
+        ? activeFile.headerCode + '\n\n' 
         : `-- Generado por LuaForge\nlocal QBCore = exports['qb-core']:GetCoreObject()\n\n`;
 
-    // 2. ORDENAR: Encontrar nodos raíz (Eventos/Comandos) y ordenarlos por posición vertical
+    // Filtramos los nodos raíz (Inicios de flujo)
     const startNodes = currentNodes.filter(n => 
         typeof n.type === 'string' && ['event-start', 'register-net', 'register-key-mapping', 'qb-command', 'thread-create'].includes(n.type)
     ).sort((a, b) => a.position.y - b.position.y);
 
-    // --- FUNCIÓN RECURSIVA PARA GENERAR CUERPO ---
-    const generateBody = (parentId: string, indent: string): string => {
+    // Función recursiva para generar bloques de lógica
+    const generateBlock = (parentId: string, indent: string): string => {
         let block = '';
         
-        // Buscar hijos conectados a 'flow-out' o 'true'
-        const connectedEdges = currentEdges.filter(e => e.source === parentId);
-        
-        // Ordenar hijos por posición X (izquierda a derecha) para mantener secuencia lógica
-        const childNodes = connectedEdges
-            .map(e => ({ 
-                node: currentNodes.find(n => n.id === e.target), 
-                handle: e.sourceHandle 
-            }))
-            .filter(item => item.node)
-            .sort((a, b) => (a.node!.position.x - b.node!.position.x));
+        // Buscar hijos conectados a 'flow-out' (flujo normal) o 'true' (IF verdadero)
+        // Ordenamos por X para seguir la secuencia visual izquierda -> derecha
+        const connections = currentEdges
+            .filter(e => e.source === parentId)
+            .sort((a, b) => {
+                const nodeA = currentNodes.find(n => n.id === a.target);
+                const nodeB = currentNodes.find(n => n.id === b.target);
+                return (nodeA?.position.x || 0) - (nodeB?.position.x || 0);
+            });
 
-        for (const { node, handle } of childNodes) {
+        for (const edge of connections) {
+            const node = currentNodes.find(n => n.id === edge.target);
             if (!node) continue;
-            
-            // Ignorar caminos 'false' aquí (se manejan dentro de su padre IF)
-            if (handle === 'false') continue;
 
-            // SI EL NODO TIENE CÓDIGO PRESERVADO, USARLO PRIORITARIAMENTE
-            // Esto evita que "app:GetPlayerId()" se convierta en "-- Script"
-            if (node.data.codeBlock && node.type !== 'logic-if') {
-                block += `${indent}${node.data.codeBlock}\n`;
-                continue; // Saltamos a la siguiente iteración, ya escribimos la línea exacta
-            }
+            // Si es un 'else' (handle false), lo gestionamos dentro del IF, no aquí
+            if (edge.sourceHandle === 'false') continue;
 
-            // SI NO TIENE CÓDIGO PRESERVADO, GENERAMOS SEGÚN TIPO
             switch (node.type) {
                 case 'logic-if':
                     block += `${indent}if ${node.data.condition || 'true'} then\n`;
-                    // Recursión para camino VERDADERO
-                    block += generateBody(node.id, indent + '    ');
+                    // Recursión: Generar lo que hay dentro del IF (camino True)
+                    block += generateBlock(node.id, indent + '    ');
                     
-                    // Buscar camino FALSO
+                    // Buscar si tiene un camino False (Else)
                     const falseEdge = currentEdges.find(e => e.source === node.id && e.sourceHandle === 'false');
                     if (falseEdge) {
-                        const falseNode = currentNodes.find(n => n.id === falseEdge.target);
-                        if (falseNode) {
-                            block += `${indent}else\n`;
-                            // Si el nodo del else tiene código preservado, úsalo
-                            if (falseNode.data.codeBlock) {
-                                block += `${indent}    ${falseNode.data.codeBlock}\n`;
-                            } else {
-                                // O generar recursivamente si es un bloque visual
-                                // (Simplificación: asumimos bloque simple para else por ahora)
-                                block += `${indent}    -- Lógica Else\n`; 
-                            }
+                        block += `${indent}else\n`;
+                        // Generar el bloque Else (Truco: generamos a partir del primer nodo del else)
+                        // Para hacerlo bien, deberíamos tratar el nodo target como el inicio de un bloque
+                        // En este generador simple, asumimos que el nodo target ES el bloque
+                        const elseNode = currentNodes.find(n => n.id === falseEdge.target);
+                        if (elseNode) {
+                             // Generamos ese nodo y sus hijos
+                             // Nota: Esto es una simplificación, idealmente elseNode es el inicio de una cadena
+                             // Pero necesitamos generar el código de ese nodo primero
+                             // Aquí duplicamos lógica por brevedad, lo ideal es una función `generateNodeCode`
+                             if (elseNode.data.codeBlock) block += `${indent}    ${elseNode.data.codeBlock}\n`;
+                             else block += `${indent}    -- Lógica Else (TODO)\n`;
                         }
                     }
                     block += `${indent}end\n`;
                     break;
 
                 case 'native-control':
-                    // Fallback si no había codeBlock
-                    block += `${indent}${node.data.label}()\n`;
+                case 'create-ped': // Y cualquier otro nodo de acción
+                    // Si tiene un bloque de código exacto guardado, úsalo.
+                    if (node.data.codeBlock) {
+                        block += `${indent}${node.data.codeBlock}\n`;
+                    } else if (node.data.label && node.data.label.includes('Call:')) {
+                         // Reconstrucción si no hay codeBlock
+                         block += `${indent}${node.data.label.replace('Call: ', '')}\n`;
+                    } else {
+                         // Fallback seguro
+                         block += `${indent}-- ${node.data.label}\n`;
+                    }
+                    // IMPORTANTE: Seguir la cadena (Recursión lineal)
+                    // Como native-control no es un contenedor, sus hijos son "siguientes pasos"
+                    block += generateBlock(node.id, indent);
                     break;
 
                 case 'qb-notify':
                     block += `${indent}QBCore.Functions.Notify('${node.data.message}', '${node.data.notifyType || 'success'}')\n`;
-                    break;
-
-                case 'logic-print':
-                    block += `${indent}print('${node.data.message}')\n`;
+                    block += generateBlock(node.id, indent);
                     break;
                 
                 case 'qb-trigger-callback':
-                     // Si perdimos el bloque interno, intentamos reconstruir uno genérico
-                     // Pero idealmente el parser ya guardó el bloque entero en 'codeBlock' arriba
                      block += `${indent}QBCore.Functions.TriggerCallback('${node.data.eventName}', function(result)\n`;
-                     block += `${indent}    -- Callback logic needs to be rewritten manually if lost\n`;
+                     block += `${indent}    -- Lógica del callback\n`;
                      block += `${indent}end)\n`;
+                     block += generateBlock(node.id, indent);
                      break;
 
-                default:
-                    block += `${indent}-- ${node.data.label}\n`;
+                case 'logic-print':
+                    block += `${indent}print('${node.data.message}')\n`;
+                    block += generateBlock(node.id, indent);
+                    break;
             }
         }
         return block;
     };
 
-    // --- GENERACIÓN DE BLOQUES PRINCIPALES ---
+    // Generar código para cada raíz
     startNodes.forEach(node => {
-        // 1. REGISTER COMMAND
         if (node.type === 'event-start') {
-            const cmdName = node.data.eventName || 'comando';
-            // Usar argumentos originales si existen, o default
-            const args = node.data.args || 'source, args';
-            
-            code += `RegisterCommand('${cmdName}', function(${args})\n`;
-            code += generateBody(node.id, '    ');
+            code += `RegisterCommand('${node.data.eventName}', function(source, args)\n`;
+            code += generateBlock(node.id, '    ');
             code += `end, false)\n\n`;
-        } 
-        // 2. REGISTER NET EVENT
+        }
         else if (node.type === 'register-net') {
-            // Manejo inteligente de nombres de evento (strings vs variables)
-            let evtName = node.data.eventName || 'net:event';
-            const isVariable = evtName.includes('..') || !evtName.match(/^['"]|['"]$/);
-            const finalName = isVariable ? evtName : `'${evtName}'`;
-            
-            const args = node.data.args || ''; // Argumentos del evento (ej: data)
-
-            code += `RegisterNetEvent(${finalName}, function(${args})\n`;
-            code += generateBody(node.id, '    ');
+            // Manejar nombres variables
+            const name = node.data.eventName;
+            const finalName = (name.includes("'") || name.includes('"') || name.includes("..")) ? name : `'${name}'`;
+            code += `RegisterNetEvent(${finalName}, function()\n`;
+            code += generateBlock(node.id, '    ');
             code += `end)\n\n`;
         }
-        // 3. KEY MAPPING
         else if (node.type === 'register-key-mapping') {
-            const { commandName, description, defaultKey } = node.data;
-            code += `RegisterKeyMapping('${commandName}', '${description}', 'keyboard', '${defaultKey}')\n\n`;
+            code += `RegisterKeyMapping('${node.data.commandName}', '${node.data.description}', 'keyboard', '${node.data.defaultKey}')\n`;
         }
     });
 
     setGeneratedCode(code);
     
-    // Guardar cambios en memoria sin disparar un re-render infinito
-    if (!isSyncing) {
-        setFiles(prev => prev.map(f => f.id === activeFile.id ? { ...f, content: code } : f));
-    }
+    // Actualizar persistencia solo si no estamos sincronizando desde el parser
+    setFiles(prev => prev.map(f => f.id === activeFile.id ? { ...f, content: code } : f));
   };
 
   const handleCodeChange = (value: string | undefined) => {
