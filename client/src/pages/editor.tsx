@@ -52,6 +52,7 @@ const nodeTypes = {
   'thread-create': CustomNode,
   'wait': CustomNode,
   'register-key-mapping': CustomNode, // El que añadimos antes
+  'function-def': CustomNode,
 
   // Entidades
   'create-ped': CustomNode,
@@ -252,9 +253,8 @@ export default function EditorPage() {
         ? activeFile.headerCode + '\n\n' 
         : `-- Generado por LuaForge\nlocal QBCore = exports['qb-core']:GetCoreObject()\n\n`;
 
-    // Filtramos los nodos raíz (Inicios de flujo)
     const startNodes = currentNodes.filter(n => 
-        typeof n.type === 'string' && ['event-start', 'register-net', 'register-key-mapping', 'qb-command', 'thread-create'].includes(n.type)
+        typeof n.type === 'string' && ['event-start', 'register-net', 'register-key-mapping', 'qb-command', 'thread-create', 'function-def'].includes(n.type)
     ).sort((a, b) => a.position.y - b.position.y);
 
     // Función recursiva para generar bloques de lógica
@@ -344,13 +344,17 @@ export default function EditorPage() {
 
     // Generar código para cada raíz
     startNodes.forEach(node => {
-        if (node.type === 'event-start') {
+        if (node.type === 'function-def') {
+            code += `function ${node.data.eventName}()\n`; 
+            code += generateBlock(node.id, '    ');
+            code += `end\n\n`;
+        }
+        else if (node.type === 'event-start') {
             code += `RegisterCommand('${node.data.eventName}', function(source, args)\n`;
             code += generateBlock(node.id, '    ');
             code += `end, false)\n\n`;
         }
         else if (node.type === 'register-net') {
-            // Manejar nombres variables
             const name = node.data.eventName;
             const finalName = (name.includes("'") || name.includes('"') || name.includes("..")) ? name : `'${name}'`;
             code += `RegisterNetEvent(${finalName}, function()\n`;
@@ -392,8 +396,6 @@ export default function EditorPage() {
       });
       return content;
   };
-
-  // ... dentro de EditorPage ...
 
   const generateNodeLogic = (node: Node, allNodes: Node[], allEdges: Edge[], indent: string): string => {
       let snippet = '';
@@ -474,7 +476,7 @@ export default function EditorPage() {
     const actionKeywords = [
         'RegisterCommand', 'RegisterNetEvent', 'RegisterKeyMapping', 
         'QBCore.Commands.Add', 'CreateThread', 'AddEventHandler',
-        'function ' // <--- AÑADIDO: Detectar funciones globales o de clase
+        'function ' // <--- IMPORTANTE
     ];
     
     const lines = code.split('\n');
@@ -528,10 +530,10 @@ export default function EditorPage() {
         const funcMatch = line.match(/^function\s+([a-zA-Z0-9_.:]+)\s*\(/);
         if (funcMatch) {
             const funcName = funcMatch[1];
-            // Usamos un nodo genérico de 'event-start' o uno específico si tienes 'function-def'
-            const nodeId = addNode('event-start', `Function: ${funcName}`, { eventName: funcName }, rootX, currentY);
+            // ¡IMPORTANTE! Usamos el tipo 'function-def'
+            const nodeId = addNode('function-def', `Función: ${funcName}`, { eventName: funcName }, rootX, currentY);
             parentStack = [{ id: nodeId, x: rootX, y: currentY }];
-            currentY += 200; // Dar espacio vertical
+            currentY += 200;
             continue;
         }
 
@@ -567,22 +569,37 @@ export default function EditorPage() {
             const ifMatch = line.match(/^if\s+(.+)\s+then$/);
             if (ifMatch) {
                 const condition = ifMatch[1];
-                nodeId = addNode('logic-if', 'Condición IF', { condition }, childX, childY);
-                linkNodes(parent.id, nodeId);
+                // Crea nodo visual
+                const nodeId = addNode('logic-if', 'Condición IF', { condition }, parentStack[parentStack.length - 1].x + 350, parentStack[parentStack.length - 1].y);
+                
+                // Conecta al padre
+                linkNodes(parentStack[parentStack.length - 1].id, nodeId);
                 
                 // Entramos al bloque IF
-                parentStack.push({ id: nodeId, x: childX, y: childY });
+                parentStack.push({ id: nodeId, x: parentStack[parentStack.length - 1].x + 350, y: parentStack[parentStack.length - 1].y });
                 continue;
+            }
+
+            else if (line.startsWith('print')) {
+                // Si el print tiene lógica compleja (format, concatenación, variables),
+                // lo guardamos como BLOQUE DE CÓDIGO NATURAl para no romperlo.
+                if (line.includes(':format') || line.includes('..') || line.includes('%')) {
+                     nodeId = addNode('native-control', 'Print Complejo', { 
+                        label: 'Print (Format)',
+                        codeBlock: line 
+                    }, childX, childY);
+                } else {
+                    // Solo usamos el nodo visual simple para textos simples
+                    const pMatch = line.match(/\(([^)]+)\)/);
+                    nodeId = addNode('logic-print', 'Debug Print', { 
+                        message: pMatch ? pMatch[1].replace(/['"]/g, '') : 'log'
+                    }, childX, childY);
+                }
             }
             
             // FIN DE BLOQUE (end)
             else if (line === 'end' || line.startsWith('end)')) {
-                if (parentStack.length > 1) {
-                    parentStack.pop(); 
-                } else {
-                    // Si cerramos el Root, limpiamos el stack para evitar conexiones cruzadas extrañas
-                    parentStack = []; 
-                }
+                if (parentStack.length > 0) parentStack.pop();
                 continue;
             }
             // ELSE
@@ -590,8 +607,6 @@ export default function EditorPage() {
                 // (Opcional) Podrías ajustar la posición Y aquí para ramificar visualmente
                 continue;
             }
-
-            // ... (Resto de detectores: Calls, Callbacks, Notify, Print - Mantenlos igual) ...
             
             // Ejemplo Call:
             else if (line.match(/\b(app|self):([a-zA-Z0-9_]+)\s*\(/)) {
