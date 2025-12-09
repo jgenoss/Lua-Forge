@@ -40,7 +40,7 @@ import {
 const nodeTypes = {
   // Eventos y Funciones
   'event-start': CustomNode,
-  'function-def': CustomNode, // <--- TIPO NECESARIO PARA TUS FUNCIONES
+  'function-def': CustomNode, 
   'event-trigger': CustomNode,
   'event-net': CustomNode,
   'event-server': CustomNode,
@@ -145,7 +145,7 @@ export default function EditorPage() {
     }
   }, [activeFile.id]);
 
-  // Cargar proyecto desde localStorage al inicio
+  // Cargar proyecto guardado
   useEffect(() => {
     const saved = localStorage.getItem('luaforge_project');
     if (saved) {
@@ -196,119 +196,218 @@ export default function EditorPage() {
   const generateLuaCode = (currentNodes: Node[], currentEdges: Edge[]) => {
     if (isSyncing) return;
 
-    let code = activeFile.headerCode 
-        ? activeFile.headerCode + '\n\n' 
-        : `-- Generado por LuaForge\nlocal QBCore = exports['qb-core']:GetCoreObject()\n\n`;
+    // header base
+    let code = activeFile.headerCode
+      ? activeFile.headerCode + '\n\n'
+      : `-- Generado por LuaForge\nlocal QBCore = exports['qb-core']:GetCoreObject()\n\n`;
 
-    // Filtramos los nodos raíz
-    const startNodes = currentNodes.filter(n => 
-        typeof n.type === 'string' && ['event-start', 'register-net', 'register-key-mapping', 'qb-command', 'thread-create', 'function-def'].includes(n.type)
-    ).sort((a, b) => a.position.y - b.position.y);
+    // Helpers defensivos
+    const safePos = (n: Node) => ({ x: (n.position as any)?.x || 0, y: (n.position as any)?.y || 0 });
+    const getData = (n: Node, key: string, fallback: any = '') => (n.data && n.data[key] != null) ? n.data[key] : fallback;
+    const escapeSingle = (s: string) => String(s).replace(/'/g, "\\'");
+
+    const startNodes = currentNodes
+      .filter(n => typeof n.type === 'string' && [
+        'event-start', 'register-net', 'register-key-mapping', 'qb-command', 'thread-create', 'function-def'
+      ].includes(n.type as string))
+      .sort((a, b) => safePos(a).y - safePos(b).y);
+
+    const visited = new Set<string>();
 
     const generateBlock = (parentId: string, indent: string): string => {
-        let block = '';
-        
-        const connections = currentEdges
-            .filter(e => e.source === parentId)
-            .sort((a, b) => {
-                const nodeA = currentNodes.find(n => n.id === a.target);
-                const nodeB = currentNodes.find(n => n.id === b.target);
-                return (nodeA?.position.x || 0) - (nodeB?.position.x || 0);
-            });
+      if (visited.has(parentId)) return '';
+      visited.add(parentId);
 
-        for (const edge of connections) {
-            const node = currentNodes.find(n => n.id === edge.target);
-            if (!node) continue;
-            if (edge.sourceHandle === 'false') continue; // El 'else' se maneja en el padre
+      let block = '';
 
-            switch (node.type) {
-                case 'logic-if':
-                    block += `${indent}if ${node.data.condition || 'true'} then\n`;
-                    block += generateBlock(node.id, indent + '    ');
-                    
-                    const falseEdge = currentEdges.find(e => e.source === node.id && e.sourceHandle === 'false');
-                    if (falseEdge) {
-                        block += `${indent}else\n`;
-                        const elseNode = currentNodes.find(n => n.id === falseEdge.target);
-                        if (elseNode) {
-                             if (elseNode.data.codeBlock) block += `${indent}    ${elseNode.data.codeBlock}\n`;
-                             block += generateBlock(elseNode.id, indent + '    ');
-                        }
-                    }
-                    block += `${indent}end\n`;
-                    break;
+      // conexiones salientes ordenadas por X del target
+      const connections = currentEdges
+        .filter(e => e.source === parentId)
+        .slice()
+        .sort((a, b) => {
+          const na = currentNodes.find(n => n.id === a.target);
+          const nb = currentNodes.find(n => n.id === b.target);
+          return (na ? (na.position as any).x || 0 : 0) - (nb ? (nb.position as any).x || 0 : 0);
+        });
 
-                case 'native-control':
-                case 'create-ped': 
-                    if (node.data.codeBlock) {
-                        const lines = node.data.codeBlock.split('\n');
-                        lines.forEach((line: string) => {
-                             block += `${indent}${line.trim()}\n`;
-                        });
-                    } else if (node.data.label && node.data.label.includes('Call:')) {
-                         block += `${indent}${node.data.label.replace('Call: ', '')}\n`;
-                    } else {
-                         block += `${indent}-- ${node.data.label}\n`;
-                    }
-                    block += generateBlock(node.id, indent);
-                    break;
+      for (const edge of connections) {
+        const node = currentNodes.find(n => n.id === edge.target);
+        if (!node) continue;
 
-                case 'qb-notify':
-                    block += `${indent}QBCore.Functions.Notify('${node.data.message}', '${node.data.notifyType || 'success'}')\n`;
-                    block += generateBlock(node.id, indent);
-                    break;
-                
-                case 'qb-trigger-callback':
-                     block += `${indent}QBCore.Functions.TriggerCallback('${node.data.eventName}', function(result)\n`;
-                     block += `${indent}    -- Lógica del callback\n`;
-                     block += `${indent}end)\n`;
-                     block += generateBlock(node.id, indent);
-                     break;
+        // Si esta arista es explícitamente 'false' (else), la manejará el nodo padre (logic-if)
+        if (edge.sourceHandle === 'false' || edge.sourceHandle === 'else') continue;
 
-                case 'logic-print':
-                    if (node.data.message.includes('%') || node.data.message.includes('..')) {
-                        block += `${indent}print(${node.data.message})\n`;
-                    } else {
-                        block += `${indent}print('${node.data.message}')\n`;
-                    }
-                    block += generateBlock(node.id, indent);
-                    break;
-                
-                case 'wait':
-                    block += `${indent}Wait(${node.data.duration || 0})\n`;
-                    block += generateBlock(node.id, indent);
-                    break;
+        const ntype = String(node.type);
+
+        switch (ntype) {
+          case 'logic-if': {
+            const condition = getData(node, 'condition', 'true');
+            block += `${indent}if ${condition} then\n`;
+
+            // sort outgoing from this if
+            const outgoing = currentEdges.filter(e => e.source === node.id).slice()
+              .sort((a, b) => {
+                const na = currentNodes.find(n => n.id === a.target);
+                const nb = currentNodes.find(n => n.id === b.target);
+                return (na ? (na.position as any).x || 0 : 0) - (nb ? (nb.position as any).x || 0 : 0);
+              });
+
+            const trueEdge = outgoing.find(e => e.sourceHandle === 'true' || e.sourceHandle === 'flow-out') || outgoing[0];
+            if (trueEdge) {
+              block += generateBlock(trueEdge.target, indent + '    ');
             }
+
+            const falseEdge = outgoing.find(e => e.sourceHandle === 'false' || e.sourceHandle === 'else') || (outgoing.length > 1 ? outgoing[1] : null);
+            if (falseEdge) {
+              block += `${indent}else\n`;
+              const elseNode = currentNodes.find(n => n.id === falseEdge.target);
+              if (elseNode && elseNode.data?.codeBlock) {
+                String(elseNode.data.codeBlock).split('\n').forEach((ln: string) => {
+                  block += `${indent}    ${ln.trim()}\n`;
+                });
+              }
+              block += generateBlock(falseEdge.target, indent + '    ');
+            }
+
+            block += `${indent}end\n`;
+            break;
+          }
+
+          case 'native-control':
+          case 'create-ped': {
+            if (node.data?.codeBlock) {
+              String(node.data.codeBlock).split('\n').forEach((line: string) => {
+                block += `${indent}${line.trim()}\n`;
+              });
+            } else if (String(getData(node, 'label', '')).includes('Call:')) {
+              block += `${indent}${String(getData(node, 'label', '')).replace('Call: ', '')}\n`;
+            } else {
+              block += `${indent}-- ${getData(node, 'label', 'acción')}\n`;
+            }
+            block += generateBlock(node.id, indent);
+            break;
+          }
+
+          case 'qb-notify': {
+            const msg = escapeSingle(String(getData(node, 'message', 'Alerta')));
+            const notifyType = String(getData(node, 'notifyType', 'success'));
+            block += `${indent}QBCore.Functions.Notify('${msg}', '${notifyType}')\n`;
+            block += generateBlock(node.id, indent);
+            break;
+          }
+
+          case 'qb-trigger-callback': {
+            const eventName = String(getData(node, 'eventName', 'unknown_event'));
+            // Generamos la llamada al callback, con su función cerrada correctamente
+            block += `${indent}QBCore.Functions.TriggerCallback('${eventName}', function(result)\n`;
+            // Si el nodo tiene codeBlock lo inyectamos dentro del callback
+            if (node.data?.codeBlock) {
+              String(node.data.codeBlock).split('\n').forEach((ln: string) => {
+                block += `${indent}    ${ln.trim()}\n`;
+              });
+            }
+            // generar hijos (si los hay) dentro del callback
+            block += generateBlock(node.id, indent + '    ');
+            block += `${indent}end)\n`;
+            // luego continuidad fuera del callback
+            block += generateBlock(node.id, indent);
+            break;
+          }
+
+          case 'logic-print': {
+            const raw = String(getData(node, 'message', ''));
+            if (raw.includes('%') || raw.includes('..') || raw.startsWith('(') || raw.startsWith('"') || raw.startsWith("'")) {
+              block += `${indent}print(${raw})\n`;
+            } else {
+              const safe = escapeSingle(raw);
+              block += `${indent}print('${safe}')\n`;
+            }
+            block += generateBlock(node.id, indent);
+            break;
+          }
+
+          case 'wait': {
+            const dur = getData(node, 'duration', 0);
+            block += `${indent}Wait(${dur})\n`;
+            block += generateBlock(node.id, indent);
+            break;
+          }
+
+          default: {
+            if (node.data?.codeBlock) {
+              String(node.data.codeBlock).split('\n').forEach((ln: string) => {
+                block += `${indent}${ln.trim()}\n`;
+              });
+            } else if (node.data?.label) {
+              block += `${indent}-- ${String(node.data.label)}\n`;
+            } else {
+              block += `${indent}-- Nodo desconocido: ${node.id}\n`;
+            }
+            block += generateBlock(node.id, indent);
+            break;
+          }
         }
-        return block;
+      }
+
+      visited.delete(parentId);
+      return block;
     };
 
+    // Construir bloques de nivel superior
     startNodes.forEach(node => {
-        if (node.type === 'function-def') {
-            code += `function ${node.data.eventName}()\n`; 
-            code += generateBlock(node.id, '    ');
-            code += `end\n\n`;
-        }
-        else if (node.type === 'event-start') {
-            code += `RegisterCommand('${node.data.eventName}', function(source, args)\n`;
-            code += generateBlock(node.id, '    ');
-            code += `end, false)\n\n`;
-        }
-        else if (node.type === 'register-net') {
-            const name = node.data.eventName;
-            const finalName = (name.includes("'") || name.includes('"') || name.includes("..")) ? name : `'${name}'`;
-            code += `RegisterNetEvent(${finalName}, function()\n`;
-            code += generateBlock(node.id, '    ');
-            code += `end)\n\n`;
-        }
-        else if (node.type === 'register-key-mapping') {
-            code += `RegisterKeyMapping('${node.data.commandName}', '${node.data.description}', 'keyboard', '${node.data.defaultKey}')\n`;
-        }
+      const ntype = String(node.type);
+      if (ntype === 'function-def') {
+        const name = String(getData(node, 'eventName', 'unnamed_function'));
+        code += `function ${name}()\n`;
+        code += generateBlock(node.id, '    ');
+        code += `end\n\n`;
+      } else if (ntype === 'event-start') {
+        const ev = String(getData(node, 'eventName', 'unknown_cmd'));
+        code += `RegisterCommand('${ev}', function(source, args)\n`;
+        code += generateBlock(node.id, '    ');
+        code += `end, false)\n\n`;
+      } else if (ntype === 'register-net') {
+        const rawName = getData(node, 'eventName', getData(node, 'label', 'net_event'));
+        const nameStr = String(rawName);
+        const finalName = (nameStr.includes("'") || nameStr.includes('"') || nameStr.includes("..")) ? nameStr : `'${nameStr}'`;
+        // Generar en dos pasos (más robusto)
+        code += `RegisterNetEvent(${finalName})\n`;
+        code += `AddEventHandler(${finalName}, function()\n`;
+        code += generateBlock(node.id, '    ');
+        code += `end)\n\n`;
+      } else if (ntype === 'register-key-mapping') {
+        const cmdName = String(getData(node, 'commandName', 'cmd'));
+        const desc = String(getData(node, 'description', ''));
+        const key = String(getData(node, 'defaultKey', ''));
+        code += `RegisterKeyMapping('${cmdName}', '${escapeSingle(desc)}', 'keyboard', '${escapeSingle(key)}')\n\n`;
+      }
     });
 
+    // Si hay referencias a `app` pero no hemos creado la instancia, la agregamos al final del header
+    const usesApp = /(\bapp\b\.)/.test(code);
+    const hasAppInstance = /local\s+app\s*=\s*gClass:new\(/.test(code) || /local\s+app\s*=/.test(activeFile.headerCode || '');
+    if (usesApp && !hasAppInstance) {
+      code = (activeFile.headerCode || `-- Autogenerado header`) + '\n\n' + code; // garantizar que el header esté primero
+      code = code.replace(/^/, `local app = gClass:new()\napp:Initialize()\n\n`); // insertamos al principio del documento
+    }
+
+    // Post-procesado: contar 'function' vs 'end' y balancear si hace falta (solo cierre adicionales)
+    const functionCount = (code.match(/\bfunction\b/g) || []).length;
+    const endCount = (code.match(/\bend\b/g) || []).length;
+    if (functionCount > endCount) {
+      const missing = functionCount - endCount;
+      for (let i = 0; i < missing; i++) {
+        code += '\nend';
+      }
+    }
+
+    // Evitar llamar setGeneratedCode si el contenido no cambió (optimización mínima)
     setGeneratedCode(code);
     setFiles(prev => prev.map(f => f.id === activeFile.id ? { ...f, content: code } : f));
   };
+
+
+
 
   // --- PARSER (LUA -> VISUAL) ---
   const applyCodeToVisual = () => {
@@ -412,8 +511,8 @@ export default function EditorPage() {
             const childY = parent.y; 
             let nodeId: string | null = null;
 
-            // IF STATEMENT
-            const ifMatch = line.match(/^if\s+(.+)\s+then$/);
+            // IF STATEMENT (Mejorado para aceptar espacios)
+            const ifMatch = line.match(/^if\s+(.+?)\s+then$/);
             if (ifMatch) {
                 const condition = ifMatch[1];
                 nodeId = addNode('logic-if', 'Condición IF', { condition }, childX, childY);
@@ -422,28 +521,30 @@ export default function EditorPage() {
                 continue;
             }
             
-            // DETECCIÓN DE CIERRE DE BLOQUE (CORREGIDA)
-            // Detecta 'end', 'end)', 'end, false)'
-            if (line.startsWith('end')) {
+            // DETECCIÓN DE CIERRE DE BLOQUE
+            // Ignoramos 'end', 'end)', 'end, false)' y no creamos nodos basura
+            if (line.startsWith('end') || line.startsWith('})')) {
                 if (parentStack.length > 0) parentStack.pop();
                 continue;
             }
 
             // WAIT
-            if (line.startsWith('Wait(')) {
-                 const duration = line.match(/\d+/);
-                 nodeId = addNode('wait', 'Esperar', { duration: duration ? duration[0] : 0 }, childX, childY);
+            const waitMatch = line.match(/^Wait\s*\(\s*(\d+)\s*\)/);
+            if (waitMatch) {
+                 nodeId = addNode('wait', 'Esperar', { duration: waitMatch[1] }, childX, childY);
             }
             // PRINT (Complex vs Simple)
             else if (line.startsWith('print')) {
                 if (line.includes(':format') || line.includes('%') || line.includes('..')) {
                      // Extraer el contenido dentro de print(...) para mostrarlo mejor en el editor
+                     // y guardar la línea completa para no romper lógica
                      const contentMatch = line.match(/^print\((.*)\)$/);
                      const displayContent = contentMatch ? contentMatch[1] : line;
                      
                      nodeId = addNode('logic-print', 'Print (Format)', { 
-                         message: displayContent, // Usamos message para guardar el contenido crudo en este caso especial
-                         codeBlock: line
+                         message: displayContent, 
+                         // Usamos un truco: guardamos message con el código crudo si es complejo
+                         // El generador sabrá que hacer.
                      }, childX, childY);
                 } else {
                     const pMatch = line.match(/\(([^)]+)\)/);
@@ -462,10 +563,17 @@ export default function EditorPage() {
             // GENERIC CODE
             else {
                  let label = 'Script';
-                 // Intentar dar nombres más útiles
-                 if (line.startsWith('local ')) label = line.split('=')[0].replace('local', '').trim();
+                 if (line.startsWith('local ')) {
+                    // Extraer nombre de variable: local player = ... -> player
+                    const varMatch = line.match(/local\s+([a-zA-Z0-9_]+)\s*=/);
+                    label = varMatch ? `Var: ${varMatch[1]}` : 'Variable';
+                 }
                  else if (line.includes(':')) label = 'Llamada';
+                 else if (line.includes('return')) label = 'Return';
                  
+                 // Limpiar etiqueta larga
+                 if (label === 'Script' && line.length > 30) label = 'Código LUA';
+
                  nodeId = addNode('native-control', label, { 
                     label: label,
                     codeBlock: line 
@@ -475,13 +583,8 @@ export default function EditorPage() {
             if (nodeId) {
                 const handle = parentStack[parentStack.length - 1].id.includes('logic-if') ? 'true' : 'flow-out';
                 linkNodes(parent.id, nodeId, handle);
-                // No anidamos native-control ni prints en el stack visual (flujo lineal)
-                if (!nodeId.includes('native-control') && !nodeId.includes('print')) {
-                   // parentStack.push... (Solo si fueran contenedores)
-                }
-                // Pero para mantener la posición Y correcta para el siguiente, actualizamos el "último nodo" visualmente
-                // En este parser simple, usamos el stack para anidamiento lógico.
-                // Para flujo secuencial, simplemente añadimos al mismo padre.
+                // Mantenemos flujo lineal visual
+                parentStack[parentStack.length - 1] = { id: nodeId, x: childX, y: childY };
             }
         }
     }
