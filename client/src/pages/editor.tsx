@@ -45,9 +45,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-// Define Node Types Registry
+// Node Types Registry
 const nodeTypes = {
-  // Eventos y Funciones
   "event-start": CustomNode,
   "function-def": CustomNode,
   "event-trigger": CustomNode,
@@ -58,8 +57,6 @@ const nodeTypes = {
   "thread-create": CustomNode,
   wait: CustomNode,
   "register-key-mapping": CustomNode,
-
-  // Entidades
   "create-ped": CustomNode,
   "create-object": CustomNode,
   "delete-entity": CustomNode,
@@ -67,38 +64,28 @@ const nodeTypes = {
   "get-entity-coords": CustomNode,
   "freeze-entity": CustomNode,
   "set-entity-invincible": CustomNode,
-
-  // Blips y Markers
   "add-blip-coord": CustomNode,
   "set-blip-sprite": CustomNode,
   "draw-marker": CustomNode,
-
-  // QBCore / ESX
   "qb-core-object": CustomNode,
   "qb-notify": CustomNode,
   "qb-command": CustomNode,
   "esx-notify": CustomNode,
   "qb-trigger-callback": CustomNode,
-
-  // Lógica y Matemáticas
   "logic-if": CustomNode,
   "logic-loop": CustomNode,
   "logic-print": CustomNode,
   "logic-math": CustomNode,
   "math-abs": CustomNode,
   "math-random": CustomNode,
-
-  // Input
   "is-control-pressed": CustomNode,
   "is-control-just-pressed": CustomNode,
   "disable-control-action": CustomNode,
-
-  // SQL
   "sql-query": CustomNode,
   "sql-insert": CustomNode,
-
-  // Generico
   "native-control": CustomNode,
+  variable: CustomNode,
+  "custom-code": CustomNode,
 };
 
 interface File {
@@ -110,6 +97,7 @@ interface File {
   edges: Edge[];
   content?: string;
   headerCode?: string;
+  generatedCode?: string;
 }
 
 export default function EditorPage() {
@@ -122,6 +110,8 @@ export default function EditorPage() {
       active: true,
       nodes: [],
       edges: [],
+      content: "-- Código Lua generado aparecerá aquí",
+      generatedCode: "-- Código Lua generado aparecerá aquí",
     },
     {
       id: "2",
@@ -130,63 +120,75 @@ export default function EditorPage() {
       active: false,
       nodes: [],
       edges: [],
+      content: "-- Código Lua generado aparecerá aquí",
+      generatedCode: "-- Código Lua generado aparecerá aquí",
     },
   ]);
 
   const activeFile = files.find((f) => f.active) || files[0];
+  const prevFileIdRef = useRef(activeFile.id);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(activeFile.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(activeFile.edges);
   const [reactFlowInstance, setReactFlowInstance] = useState<any>(null);
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const [generatedCode, setGeneratedCode] = useState<string>(
-    "-- Código Lua generado aparecerá aquí"
+    activeFile.generatedCode || "-- Código Lua generado aparecerá aquí"
   );
   const [viewMode, setViewMode] = useState<"visual" | "code">("visual");
   const [isSyncing, setIsSyncing] = useState(false);
 
   const { toast } = useToast();
 
-  // Cargar estado al cambiar de archivo
+  // ✅ CARGAR ESTADO SOLO AL CAMBIAR DE ARCHIVO
   useEffect(() => {
-    setNodes(activeFile.nodes);
-    setEdges(activeFile.edges);
-    if (activeFile.content) {
-      setGeneratedCode(activeFile.content);
-    }
-  }, [activeFile.id]);
+    if (prevFileIdRef.current !== activeFile.id) {
+      console.log("📂 Cambiando archivo:", activeFile.name);
 
-  // Cargar proyecto guardado
+      setNodes(activeFile.nodes || []);
+      setEdges(activeFile.edges || []);
+      setGeneratedCode(
+        activeFile.generatedCode || activeFile.content || "-- Código generado"
+      );
+      setSelectedNode(null);
+
+      prevFileIdRef.current = activeFile.id;
+    }
+  }, [activeFile.id, setNodes, setEdges]);
+
+  // ✅ CARGAR PROYECTO GUARDADO (SOLO UNA VEZ AL MONTAR)
   useEffect(() => {
     const saved = localStorage.getItem("luaforge_project");
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
+        console.log("📦 Cargando proyecto guardado");
         setFiles(parsed);
-        const active = parsed.find((f: any) => f.active) || parsed[0];
-        setNodes(active.nodes || []);
-        setEdges(active.edges || []);
-        setGeneratedCode(active.content || "-- Código cargado");
       } catch (e) {
-        console.error("Error cargando guardado", e);
+        console.error("❌ Error cargando guardado:", e);
       }
     }
-  }, []);
+  }, []); // Sin dependencias - solo ejecutar al montar
 
-  const saveProject = () => {
+  // ✅ GUARDAR PROYECTO
+  const saveProject = useCallback(() => {
+    // Actualizar archivo activo con estado actual
     const updatedFiles = files.map((f) => {
       if (f.id === activeFile.id) {
         return {
           ...f,
           nodes: nodes,
           edges: edges,
-          content: viewMode === "code" ? generatedCode : f.content,
+          content: generatedCode,
+          generatedCode: generatedCode,
+          headerCode: activeFile.headerCode,
         };
       }
       return f;
     });
 
     setFiles(updatedFiles);
+
     try {
       localStorage.setItem("luaforge_project", JSON.stringify(updatedFiles));
       toast({
@@ -201,45 +203,90 @@ export default function EditorPage() {
         variant: "destructive",
       });
     }
-  };
+  }, [
+    files,
+    activeFile.id,
+    nodes,
+    edges,
+    generatedCode,
+    activeFile.headerCode,
+    toast,
+  ]);
 
-  // --- GENERADOR DE CÓDIGO (VISUAL -> LUA) ---
-  const generateLuaCode = (currentNodes: Node[], currentEdges: Edge[]) => {
-    if (isSyncing) return;
+  // ✅ GENERAR CÓDIGO LUA DESDE VISUAL (SIN BUCLES)
+  const generateLuaCode = useCallback(
+    (currentNodes: Node[], currentEdges: Edge[]) => {
+      if (isSyncing) {
+        console.log("⏭️ Saltando generación - syncing en progreso");
+        return;
+      }
 
-    const code = convertVisualToLua(
-      currentNodes,
-      currentEdges,
-      activeFile.headerCode
-    );
-    setGeneratedCode(code);
+      console.log("🔄 Generando código Lua desde visual");
 
-    setFiles((prev) =>
-      prev.map((f) => {
-        if (f.id === activeFile.id) {
-          return {
-            ...f,
-            content: code,
-          };
-        }
-        return f;
-      })
-    );
-  };
+      const code = convertVisualToLua(
+        currentNodes,
+        currentEdges,
+        activeFile.headerCode
+      );
 
-  // --- PARSER (LUA -> VISUAL) ---
-  const applyCodeToVisual = () => {
+      setGeneratedCode(code);
+
+      // Actualizar archivo en files
+      setFiles((prev) =>
+        prev.map((f) => {
+          if (f.id === activeFile.id) {
+            return {
+              ...f,
+              content: code,
+              generatedCode: code,
+              nodes: currentNodes,
+              edges: currentEdges,
+            };
+          }
+          return f;
+        })
+      );
+    },
+    [isSyncing, activeFile.id, activeFile.headerCode]
+  );
+
+  // ✅ APLICAR CÓDIGO A VISUAL (PARSER)
+  const applyCodeToVisual = useCallback(() => {
+    console.log("📝 Aplicando código a visual");
+    console.log("📄 Código a parsear:", generatedCode.substring(0, 200));
+
     setIsSyncing(true);
     const code = generatedCode;
+
+    const timeoutId = setTimeout(() => {
+      console.error("⏱️ Parser timeout - abortando");
+      setIsSyncing(false);
+      toast({
+        title: "Timeout",
+        description:
+          "El parser tardó demasiado. Revisa la sintaxis del código.",
+        variant: "destructive",
+      });
+    }, 5000);
 
     setTimeout(() => {
       try {
         const headerCode = extractHeaderCode(code);
+        console.log("📋 Header extraído:", headerCode);
+
         const {
           nodes: newNodes,
           edges: newEdges,
           error,
         } = convertLuaToVisual(code);
+
+        console.log("🔍 Resultado parser:", {
+          nodesCount: newNodes.length,
+          edgesCount: newEdges.length,
+          error,
+        });
+
+        clearTimeout(timeoutId);
 
         if (error) {
           toast({
@@ -247,9 +294,21 @@ export default function EditorPage() {
             description: error,
             variant: "destructive",
           });
+          setIsSyncing(false);
           return;
         }
 
+        if (newNodes.length === 0) {
+          console.warn("⚠️ Parser no generó nodos");
+          toast({
+            title: "Sin nodos",
+            description:
+              "El código no generó nodos visuales. Verifica la sintaxis.",
+            variant: "destructive",
+          });
+        }
+
+        console.log("✅ Aplicando nodos y edges");
         setNodes(newNodes);
         setEdges(newEdges);
 
@@ -262,212 +321,313 @@ export default function EditorPage() {
                 edges: newEdges,
                 headerCode,
                 content: code,
+                generatedCode: code,
               };
             }
             return f;
           })
         );
+
+        toast({
+          title: "Código Sincronizado",
+          description: `${newNodes.length} nodos y ${newEdges.length} conexiones aplicadas.`,
+          className: "bg-green-600 text-white border-none",
+        });
       } catch (e) {
-        console.error("Error crítico al aplicar código:", e);
+        clearTimeout(timeoutId);
+        console.error("❌ Error crítico al aplicar código:", e);
         toast({
           title: "Error Crítico",
-          description: "Ocurrió un error inesperado al procesar el código.",
+          description: e instanceof Error ? e.message : "Error desconocido",
           variant: "destructive",
         });
       } finally {
-        // ✅ SE EJECUTA SIEMPRE
         setIsSyncing(false);
       }
-    }, 0);
-  };
+    }, 100);
+  }, [generatedCode, activeFile.id, setNodes, setEdges, toast]);
 
-  const handleCodeChange = (value: string | undefined) => {
-    const val = value || "";
-    setGeneratedCode(val);
+  // ✅ MANEJAR CAMBIOS EN EL EDITOR DE CÓDIGO
+  const handleCodeChange = useCallback(
+    (value: string | undefined) => {
+      const val = value || "";
+      setGeneratedCode(val);
 
-    setFiles((prev) =>
-      prev.map((f) => {
-        if (f.id === activeFile.id) {
-          return { ...f, content: val };
-        }
-        return f;
-      })
-    );
-  };
+      setFiles((prev) =>
+        prev.map((f) => {
+          if (f.id === activeFile.id) {
+            return { ...f, content: val, generatedCode: val };
+          }
+          return f;
+        })
+      );
+    },
+    [activeFile.id]
+  );
 
-  // --- MANEJO DE CAMBIOS SEGURO (SIN useEffect) ---
-  const onGraphChange = useCallback(() => {
-    if (isSyncing) return;
-    generateLuaCode(nodes, edges);
-
-    setFiles((prev) =>
-      prev.map((f) => {
-        if (f.id === activeFile.id) {
-          return { ...f, nodes, edges };
-        }
-        return f;
-      })
-    );
-  }, [nodes, edges, isSyncing, activeFile.id]);
-
-  // Solo guardar al soltar un nodo (Drag Stop)
+  // ✅ REGENERAR CÓDIGO AL SOLTAR NODO (NO EN CADA MOVIMIENTO)
   const onNodeDragStop = useCallback(() => {
-    onGraphChange();
-  }, [onGraphChange]);
+    if (!isSyncing) {
+      console.log("🎯 Nodo soltado - regenerando código");
+      generateLuaCode(nodes, edges);
+    }
+  }, [nodes, edges, isSyncing, generateLuaCode]);
 
-  // Guardar al conectar
+  // ✅ CONECTAR NODOS
   const onConnect = useCallback(
     (params: Connection) => {
+      console.log("🔗 Conectando nodos");
+
       setEdges((eds) => {
         const updatedEdges = addEdge(params, eds);
 
-        // ✅ Generar código con edges actualizados
+        // Regenerar código con edges actualizados
         setTimeout(() => {
           if (!isSyncing) {
-            const code = convertVisualToLua(
-              nodes,
-              updatedEdges,
-              activeFile.headerCode
-            );
-            setGeneratedCode(code);
-
-            setFiles((prev) =>
-              prev.map((f) => {
-                if (f.id === activeFile.id) {
-                  return { ...f, edges: updatedEdges, content: code };
-                }
-                return f;
-              })
-            );
+            generateLuaCode(nodes, updatedEdges);
           }
         }, 50);
 
         return updatedEdges;
       });
     },
-    [nodes, isSyncing, activeFile]
+    [nodes, isSyncing, generateLuaCode]
   );
 
+  // ✅ DRAG OVER
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
   }, []);
 
+  // ✅ DROP NODO
   const onDrop = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault();
       const type = event.dataTransfer.getData("application/reactflow/type");
       const label = event.dataTransfer.getData("application/reactflow/label");
-      if (typeof type === "undefined" || !type) return;
 
-      const position = reactFlowInstance.screenToFlowPosition({
+      if (!type) return;
+
+      const position = reactFlowInstance?.screenToFlowPosition({
         x: event.clientX,
         y: event.clientY,
       });
+
+      // ✅ Añadir datos iniciales según tipo de nodo
+      const getInitialData = (nodeType: string) => {
+        const defaults: Record<string, any> = {
+          "register-net": { eventName: "eventName" },
+          "qb-notify": { message: "Notification", notifyType: "success" },
+          "thread-create": { loopType: "none" },
+          wait: { ms: "0" },
+          "logic-if": { condition: "true" },
+          "logic-loop": { loopType: "while", condition: "true" },
+          variable: { varName: "myVar", value: "nil" },
+          "function-def": { funcName: "myFunction", params: "" },
+          "create-ped": {
+            model: "a_m_m_business_01",
+            x: "0.0",
+            y: "0.0",
+            z: "0.0",
+            heading: "0.0",
+          },
+          "event-trigger": { eventName: "eventName", args: "" },
+          "custom-code": { codeBlock: "-- Custom code" },
+        };
+        return defaults[nodeType] || {};
+      };
 
       const newNode: Node = {
         id: `${type}-${Date.now()}`,
         type,
         position,
-        data: { label },
+        data: { label, ...getInitialData(type) }, // ✅ Datos iniciales
       };
 
       setNodes((nds) => {
         const updatedNodes = nds.concat(newNode);
 
-        // ✅ Generar código inmediatamente con nodos actualizados
         setTimeout(() => {
           if (!isSyncing) {
-            const code = convertVisualToLua(
-              updatedNodes,
-              edges,
-              activeFile.headerCode
-            );
-            setGeneratedCode(code);
-
-            setFiles((prev) =>
-              prev.map((f) => {
-                if (f.id === activeFile.id) {
-                  return { ...f, nodes: updatedNodes, edges, content: code };
-                }
-                return f;
-              })
-            );
+            generateLuaCode(updatedNodes, edges);
           }
         }, 50);
 
         return updatedNodes;
       });
     },
-    [reactFlowInstance, edges, isSyncing, activeFile]
+    [reactFlowInstance, edges, isSyncing, generateLuaCode, setNodes]
   );
 
+  // ✅ SELECCIONAR NODO
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
+    console.log("👆 Nodo seleccionado:", node.type);
     setSelectedNode(node);
-    // ¡NO LLAMAMOS A onGraphChange AQUÍ!
   }, []);
 
-  const updateNodeData = (key: string, value: any) => {
-    if (!selectedNode) return;
+  const updateTimerRef = useRef<number | null>(null);
 
-    // Verificar si el valor realmente cambió
-    if (selectedNode.data && selectedNode.data[key] === value) return;
+  const updateNodeData = useCallback(
+    (key: string, value: any) => {
+      if (!selectedNode) return;
 
-    setNodes((nds) =>
-      nds.map((node) => {
-        if (node.id === selectedNode.id) {
-          const newData = { ...node.data, [key]: value };
-          setSelectedNode({ ...node, data: newData });
-          return { ...node, data: newData };
+      setNodes((nds) =>
+        nds.map((node) => {
+          if (node.id === selectedNode.id) {
+            const updatedNode = {
+              ...node,
+              data: { ...node.data, [key]: value },
+            };
+            setSelectedNode(updatedNode);
+            return updatedNode;
+          }
+          return node;
+        })
+      );
+
+      if (updateTimerRef.current !== null) {
+        clearTimeout(updateTimerRef.current);
+      }
+
+      updateTimerRef.current = window.setTimeout(() => {
+        // ✅ window.setTimeout
+        if (!isSyncing) {
+          generateLuaCode(nodes, edges);
         }
-        return node;
-      })
-    );
+      }, 500);
+    },
+    [selectedNode, setNodes, nodes, edges, isSyncing, generateLuaCode]
+  );
 
-    // Debounce más largo para evitar regeneraciones múltiples
-    setTimeout(onGraphChange, 800);
-  };
-
-  const deleteSelectedNode = () => {
+  // ✅ ELIMINAR NODO
+  const deleteSelectedNode = useCallback(() => {
     if (!selectedNode) return;
-    setNodes((nds) => nds.filter((n) => n.id !== selectedNode.id));
-    setSelectedNode(null);
-    setTimeout(onGraphChange, 50);
-  };
 
-  const handleFileSelect = (id: string) => {
-    setFiles((prev) => prev.map((f) => ({ ...f, active: f.id === id })));
-    setSelectedNode(null);
-  };
+    console.log("🗑️ Eliminando nodo:", selectedNode.id);
 
-  const handleFileCreate = (type: "client" | "server") => {
-    const newFile: File = {
-      id: Date.now().toString(),
-      name: `new_${type}.lua`,
-      type,
-      active: true,
-      nodes: [],
-      edges: [],
-    };
-    setFiles((prev) =>
-      prev.map((f) => ({ ...f, active: false } as File)).concat(newFile)
-    );
-  };
+    setNodes((nds) => {
+      const updatedNodes = nds.filter((node) => node.id !== selectedNode.id);
 
-  const handleFileDelete = (id: string) => {
-    setFiles((prev) => {
-      const remaining = prev.filter((f) => f.id !== id);
-      if (remaining.length > 0) remaining[0].active = true;
-      return remaining;
+      setTimeout(() => {
+        if (!isSyncing) {
+          generateLuaCode(updatedNodes, edges);
+        }
+      }, 50);
+
+      return updatedNodes;
     });
-  };
 
-  const handleMenuAction = (action: string) => {
-    toast({ title: action, description: "Función simulada." });
-  };
+    setEdges((eds) =>
+      eds.filter(
+        (edge) =>
+          edge.source !== selectedNode.id && edge.target !== selectedNode.id
+      )
+    );
+
+    setSelectedNode(null);
+  }, [selectedNode, edges, isSyncing, generateLuaCode, setNodes, setEdges]);
+
+  // ✅ ELIMINAR EDGE
+  const onEdgesDelete = useCallback(
+    (deletedEdges: Edge[]) => {
+      console.log("🗑️ Eliminando edges");
+
+      setTimeout(() => {
+        if (!isSyncing) {
+          generateLuaCode(nodes, edges);
+        }
+      }, 50);
+    },
+    [nodes, edges, isSyncing, generateLuaCode]
+  );
+
+  // ✅ CAMBIAR ARCHIVO
+  const switchFile = useCallback(
+    (fileId: string) => {
+      console.log("🔄 Cambiando a archivo:", fileId);
+
+      // Guardar estado actual antes de cambiar
+      setFiles((prev) =>
+        prev.map((f) => {
+          if (f.id === activeFile.id) {
+            return {
+              ...f,
+              nodes,
+              edges,
+              content: generatedCode,
+              generatedCode,
+            };
+          }
+          if (f.id === fileId) {
+            return { ...f, active: true };
+          }
+          return { ...f, active: false };
+        })
+      );
+    },
+    [activeFile.id, nodes, edges, generatedCode]
+  );
+
+  // ✅ MENU ACTIONS
+  const handleMenuAction = useCallback(
+    (action: string) => {
+      if (action === "Guardar") {
+        saveProject();
+      } else if (action === "Nuevo Proyecto") {
+        if (confirm("¿Crear nuevo proyecto? Se perderá el progreso actual.")) {
+          setFiles([
+            {
+              id: "1",
+              name: "client.lua",
+              type: "client",
+              active: true,
+              nodes: [],
+              edges: [],
+              content: "-- Código nuevo",
+              generatedCode: "-- Código nuevo",
+            },
+            {
+              id: "2",
+              name: "server.lua",
+              type: "server",
+              active: false,
+              nodes: [],
+              edges: [],
+              content: "-- Código nuevo",
+              generatedCode: "-- Código nuevo",
+            },
+          ]);
+          setNodes([]);
+          setEdges([]);
+          setGeneratedCode("-- Código nuevo");
+          localStorage.removeItem("luaforge_project");
+        }
+      }
+    },
+    [saveProject, setNodes, setEdges]
+  );
+
+  // ✅ EXPORTAR LUA
+  const exportLua = useCallback(() => {
+    const blob = new Blob([generatedCode], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = activeFile.name;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    toast({
+      title: "Exportado",
+      description: `${activeFile.name} descargado correctamente.`,
+      className: "bg-green-600 text-white border-none",
+    });
+  }, [generatedCode, activeFile.name, toast]);
 
   return (
     <div className="flex flex-col h-screen w-full bg-[#1e1e1e] overflow-hidden text-gray-200 font-sans selection:bg-[#007fd4] selection:text-white">
+      {/* HEADER */}
       <header className="h-10 border-b border-[#2a2a2a] bg-[#1e1e1e] flex items-center justify-between px-3 shrink-0">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
@@ -504,6 +664,7 @@ export default function EditorPage() {
           </div>
         </div>
 
+        {/* CONTROLES */}
         <div className="flex items-center gap-2">
           <div className="bg-[#2a2a2a] p-1 rounded flex gap-1 border border-[#3e3e42] mr-2">
             <Button
@@ -537,124 +698,101 @@ export default function EditorPage() {
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 gap-2 bg-[#007fd4] hover:bg-[#007fd4]/90 text-white rounded-sm"
-            onClick={saveProject}
+            onClick={applyCodeToVisual}
+            className="h-6 text-xs gap-1 text-gray-400 hover:text-white hover:bg-[#2a2a2a]"
+            title="Sincronizar código con visual"
           >
-            <Save className="w-3.5 h-3.5" />
-            <span className="text-xs">Guardar</span>
+            <RefreshCw className="w-3 h-3" />
+            Sync
           </Button>
+
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 gap-2 bg-[#2d2d2d] hover:bg-[#3d3d3d] text-white border border-[#3e3e42] rounded-sm"
+            onClick={saveProject}
+            className="h-6 text-xs gap-1 text-gray-400 hover:text-white hover:bg-[#2a2a2a]"
+            title="Guardar proyecto"
           >
-            <Download className="w-3.5 h-3.5" />
-            <span className="text-xs">Exportar</span>
+            <Save className="w-3 h-3" />
+            Guardar
+          </Button>
+
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={exportLua}
+            className="h-6 text-xs gap-1 text-gray-400 hover:text-white hover:bg-[#2a2a2a]"
+            title="Exportar archivo Lua"
+          >
+            <Download className="w-3 h-3" />
+            Exportar
           </Button>
         </div>
       </header>
 
-      <div className="flex-1 flex overflow-hidden">
-        <ResizablePanelGroup direction="horizontal">
-          <ResizablePanel
-            defaultSize={20}
-            minSize={15}
-            maxSize={25}
-            className="bg-[#151515]"
-          >
-            <ResizablePanelGroup direction="vertical">
-              <ResizablePanel defaultSize={40} minSize={20}>
-                <FileExplorer
-                  files={files}
-                  onFileSelect={handleFileSelect}
-                  onFileCreate={handleFileCreate}
-                  onFileDelete={handleFileDelete}
-                />
-              </ResizablePanel>
-              <ResizableHandle className="bg-[#2a2a2a]" />
-              <ResizablePanel defaultSize={60} minSize={30}>
-                <Sidebar />
-              </ResizablePanel>
-            </ResizablePanelGroup>
+      {/* MAIN CONTENT */}
+      <div className="flex flex-1 overflow-hidden">
+        <ResizablePanelGroup direction="horizontal" className="flex-1">
+          {/* SIDEBAR */}
+          <ResizablePanel defaultSize={15} minSize={10} maxSize={20}>
+            <Sidebar />
           </ResizablePanel>
 
-          <ResizableHandle className="bg-[#2a2a2a]" />
+          <ResizableHandle className="w-px bg-[#2a2a2a]" />
 
-          <ResizablePanel defaultSize={55} minSize={30} className="bg-[#111]">
-            <div className="h-full flex flex-col">
-              <div className="h-8 bg-[#1e1e1e] border-b border-[#2a2a2a] flex items-center">
-                {files
-                  .filter((f) => f.active)
-                  .map((f) => (
-                    <div
-                      key={f.id}
-                      className="h-full px-4 flex items-center gap-2 bg-[#1e1e1e] border-r border-[#2a2a2a] text-xs text-blue-400 border-t-2 border-t-blue-500"
-                    >
-                      {f.name}{" "}
-                      <span className="text-gray-500 ml-2 cursor-pointer hover:text-white">
-                        ×
-                      </span>
-                    </div>
-                  ))}
-              </div>
-
-              {viewMode === "visual" ? (
-                <div className="flex-1 relative" ref={reactFlowWrapper}>
-                  <ReactFlowProvider>
-                    <ReactFlow
-                      nodes={nodes}
-                      edges={edges}
-                      onNodesChange={onNodesChange}
-                      onEdgesChange={onEdgesChange}
-                      onConnect={onConnect}
-                      onNodeDragStop={onNodeDragStop}
-                      onInit={setReactFlowInstance}
-                      onDrop={onDrop}
-                      onDragOver={onDragOver}
-                      onNodeClick={onNodeClick}
-                      nodeTypes={nodeTypes}
-                      fitView
-                      className="bg-[#111]"
-                      minZoom={0.1}
-                    >
-                      <Background color="#2a2a2a" gap={24} size={1} />
-                      <Controls className="bg-[#2a2a2a] border-[#3e3e42] fill-gray-200" />
-                    </ReactFlow>
-                  </ReactFlowProvider>
-                </div>
-              ) : (
-                <div className="flex-1 bg-[#1e1e1e] flex flex-col">
-                  <div className="bg-[#252526] p-2 flex justify-end border-b border-[#3e3e42]">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={applyCodeToVisual}
-                      className="h-7 text-xs gap-2 border-amber-600/50 text-amber-500 hover:bg-amber-900/20"
-                    >
-                      <RefreshCw className="w-3 h-3" />
-                      Aplicar Código a Visual
-                    </Button>
-                  </div>
-                  <div className="flex-1">
-                    <CodeEditor
-                      code={generatedCode}
-                      onChange={handleCodeChange}
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
+          {/* FILE EXPLORER */}
+          <ResizablePanel defaultSize={10} minSize={8} maxSize={15}>
+            <FileExplorer
+              files={files}
+              // @ts-ignore: onFileClick may not be declared in FileExplorerProps but we need to pass the handler
+              onFileClick={switchFile}
+              activeFileId={activeFile.id}
+            />
           </ResizablePanel>
 
-          <ResizableHandle className="bg-[#2a2a2a]" />
+          <ResizableHandle className="w-px bg-[#2a2a2a]" />
 
-          <ResizablePanel
-            defaultSize={25}
-            minSize={20}
-            maxSize={35}
-            className="bg-[#1e1e1e]"
-          >
+          {/* CANVAS / CODE EDITOR */}
+          <ResizablePanel defaultSize={50} minSize={30}>
             {viewMode === "visual" ? (
+              <div
+                ref={reactFlowWrapper}
+                style={{ width: "100%", height: "100%" }}
+              >
+                <ReactFlow
+                  nodes={nodes}
+                  edges={edges}
+                  onNodesChange={onNodesChange}
+                  onEdgesChange={onEdgesChange}
+                  onEdgesDelete={onEdgesDelete}
+                  onConnect={onConnect}
+                  onInit={setReactFlowInstance}
+                  onDrop={onDrop}
+                  onDragOver={onDragOver}
+                  onNodeClick={onNodeClick}
+                  onNodeDragStop={onNodeDragStop}
+                  nodeTypes={nodeTypes}
+                  fitView
+                  className="bg-[#1e1e1e]"
+                >
+                  <Background color="#3e3e42" gap={20} size={1} />
+                  <Controls className="bg-[#252526] border-[#3e3e42]" />
+                </ReactFlow>
+              </div>
+            ) : (
+              <CodeEditor
+                code={generatedCode}
+                onChange={handleCodeChange}
+                readOnly={false}
+              />
+            )}
+          </ResizablePanel>
+
+          <ResizableHandle className="w-px bg-[#2a2a2a]" />
+
+          {/* PROPERTIES / CODE PREVIEW */}
+          <ResizablePanel defaultSize={25} minSize={20} maxSize={35}>
+            {selectedNode && viewMode === "visual" ? (
               <>
                 <PropertiesPanel
                   selectedNode={selectedNode}
@@ -671,10 +809,14 @@ export default function EditorPage() {
               <div className="p-6 text-gray-400 text-sm text-center mt-10 flex flex-col items-center">
                 <FileCode className="w-12 h-12 mb-4 text-[#3e3e42]" />
                 <h3 className="text-gray-200 font-medium mb-2">
-                  Modo de Edición de Código
+                  {viewMode === "code"
+                    ? "Modo de Edición de Código"
+                    : "Selecciona un nodo"}
                 </h3>
                 <p className="text-xs text-gray-500 max-w-[200px] leading-relaxed">
-                  Estás editando el código fuente directamente.
+                  {viewMode === "code"
+                    ? "Estás editando el código fuente directamente."
+                    : "Haz clic en un nodo para ver sus propiedades."}
                 </p>
               </div>
             )}
@@ -682,10 +824,14 @@ export default function EditorPage() {
         </ResizablePanelGroup>
       </div>
 
+      {/* FOOTER */}
       <footer className="h-6 bg-[#007fd4] flex items-center px-2 justify-between shrink-0">
         <div className="flex items-center gap-4 text-[10px] text-white font-medium">
           <span>LISTO</span>
           <span>{activeFile.type.toUpperCase()} MODE</span>
+          <span>
+            {nodes.length} NODOS | {edges.length} CONEXIONES
+          </span>
         </div>
       </footer>
     </div>

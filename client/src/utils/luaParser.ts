@@ -1,17 +1,17 @@
-// luaParser.ts - Parser AST robusto para código Lua
-import { Node, Edge } from 'reactflow';
+// luaParser.ts - Parser AST completo y robusto para código Lua
+import { Node, Edge } from "reactflow";
 
 // Tipos de tokens
 enum TokenType {
-  KEYWORD = 'KEYWORD',
-  IDENTIFIER = 'IDENTIFIER',
-  STRING = 'STRING',
-  NUMBER = 'NUMBER',
-  OPERATOR = 'OPERATOR',
-  PUNCTUATION = 'PUNCTUATION',
-  COMMENT = 'COMMENT',
-  WHITESPACE = 'WHITESPACE',
-  EOF = 'EOF'
+  KEYWORD = "KEYWORD",
+  IDENTIFIER = "IDENTIFIER",
+  STRING = "STRING",
+  NUMBER = "NUMBER",
+  OPERATOR = "OPERATOR",
+  PUNCTUATION = "PUNCTUATION",
+  COMMENT = "COMMENT",
+  WHITESPACE = "WHITESPACE",
+  EOF = "EOF",
 }
 
 interface Token {
@@ -37,9 +37,27 @@ class LuaLexer {
   private column: number = 1;
 
   private keywords = new Set([
-    'local', 'function', 'end', 'if', 'then', 'else', 'elseif',
-    'while', 'do', 'for', 'repeat', 'until', 'return', 'break',
-    'in', 'and', 'or', 'not', 'true', 'false', 'nil'
+    "local",
+    "function",
+    "end",
+    "if",
+    "then",
+    "else",
+    "elseif",
+    "while",
+    "do",
+    "for",
+    "repeat",
+    "until",
+    "return",
+    "break",
+    "in",
+    "and",
+    "or",
+    "not",
+    "true",
+    "false",
+    "nil",
   ]);
 
   constructor(input: string) {
@@ -47,12 +65,12 @@ class LuaLexer {
   }
 
   private peek(offset: number = 0): string {
-    return this.input[this.position + offset] || '';
+    return this.input[this.position + offset] || "";
   }
 
   private advance(): string {
     const char = this.input[this.position++];
-    if (char === '\n') {
+    if (char === "\n") {
       this.line++;
       this.column = 1;
     } else {
@@ -69,11 +87,11 @@ class LuaLexer {
 
   private readString(quote: string): Token {
     const start = { line: this.line, column: this.column };
-    let value = '';
+    let value = "";
     this.advance(); // skip opening quote
 
     while (this.peek() && this.peek() !== quote) {
-      if (this.peek() === '\\') {
+      if (this.peek() === "\\") {
         this.advance();
         value += this.advance();
       } else {
@@ -89,13 +107,13 @@ class LuaLexer {
       type: TokenType.STRING,
       value,
       line: start.line,
-      column: start.column
+      column: start.column,
     };
   }
 
   private readNumber(): Token {
     const start = { line: this.line, column: this.column };
-    let value = '';
+    let value = "";
 
     while (/[0-9.]/.test(this.peek())) {
       value += this.advance();
@@ -105,13 +123,13 @@ class LuaLexer {
       type: TokenType.NUMBER,
       value,
       line: start.line,
-      column: start.column
+      column: start.column,
     };
   }
 
   private readIdentifier(): Token {
     const start = { line: this.line, column: this.column };
-    let value = '';
+    let value = "";
 
     while (/[a-zA-Z0-9_]/.test(this.peek())) {
       value += this.advance();
@@ -121,32 +139,33 @@ class LuaLexer {
       type: this.keywords.has(value) ? TokenType.KEYWORD : TokenType.IDENTIFIER,
       value,
       line: start.line,
-      column: start.column
+      column: start.column,
     };
   }
 
   private readComment(): Token {
     const start = { line: this.line, column: this.column };
-    let value = '';
+    let value = "";
 
-    // Skip --
-    this.advance();
-    this.advance();
+    this.advance(); // skip first -
+    this.advance(); // skip second -
 
-    // Check for multiline comment --[[
-    if (this.peek() === '[' && this.peek(1) === '[') {
-      this.advance();
-      this.advance();
-      while (this.peek() && !(this.peek() === ']' && this.peek(1) === ']')) {
+    // Multi-line comment
+    if (this.peek() === "[" && this.peek(1) === "[") {
+      this.advance(); // [
+      this.advance(); // [
+
+      while (this.peek() && !(this.peek() === "]" && this.peek(1) === "]")) {
         value += this.advance();
       }
-      if (this.peek() === ']') {
+
+      if (this.peek() === "]") {
         this.advance();
         this.advance();
       }
     } else {
       // Single line comment
-      while (this.peek() && this.peek() !== '\n') {
+      while (this.peek() && this.peek() !== "\n") {
         value += this.advance();
       }
     }
@@ -155,7 +174,7 @@ class LuaLexer {
       type: TokenType.COMMENT,
       value,
       line: start.line,
-      column: start.column
+      column: start.column,
     };
   }
 
@@ -170,7 +189,7 @@ class LuaLexer {
       const char = this.peek();
 
       // Comments
-      if (char === '-' && this.peek(1) === '-') {
+      if (char === "-" && this.peek(1) === "-") {
         tokens.push(this.readComment());
         continue;
       }
@@ -193,33 +212,85 @@ class LuaLexer {
         continue;
       }
 
-      // Operators and punctuation
-      const operators = ['==', '~=', '<=', '>=', '..', '+=', '-=', '*=', '/='];
-      let matched = false;
-
-      for (const op of operators) {
-        if (this.input.substr(this.position, op.length) === op) {
-          tokens.push({
-            type: TokenType.OPERATOR,
-            value: op,
-            line: this.line,
-            column: this.column
-          });
-          for (let i = 0; i < op.length; i++) this.advance();
-          matched = true;
-          break;
-        }
+      // Multi-character operators
+      if (char === "=" && this.peek(1) === "=") {
+        tokens.push({
+          type: TokenType.OPERATOR,
+          value: "==",
+          line: this.line,
+          column: this.column,
+        });
+        this.advance();
+        this.advance();
+        continue;
       }
 
-      if (matched) continue;
-
-      // Single character tokens
-      if ('(){}[],;:+-*/%=<>'.includes(char)) {
+      if (char === "~" && this.peek(1) === "=") {
         tokens.push({
-          type: /[(){}[\],;:]/.test(char) ? TokenType.PUNCTUATION : TokenType.OPERATOR,
+          type: TokenType.OPERATOR,
+          value: "~=",
+          line: this.line,
+          column: this.column,
+        });
+        this.advance();
+        this.advance();
+        continue;
+      }
+
+      if (char === "<" && this.peek(1) === "=") {
+        tokens.push({
+          type: TokenType.OPERATOR,
+          value: "<=",
+          line: this.line,
+          column: this.column,
+        });
+        this.advance();
+        this.advance();
+        continue;
+      }
+
+      if (char === ">" && this.peek(1) === "=") {
+        tokens.push({
+          type: TokenType.OPERATOR,
+          value: ">=",
+          line: this.line,
+          column: this.column,
+        });
+        this.advance();
+        this.advance();
+        continue;
+      }
+
+      if (char === "." && this.peek(1) === ".") {
+        tokens.push({
+          type: TokenType.OPERATOR,
+          value: "..",
+          line: this.line,
+          column: this.column,
+        });
+        this.advance();
+        this.advance();
+        continue;
+      }
+
+      // Single-character tokens
+      if ("(){}[],.;:".includes(char)) {
+        tokens.push({
+          type: TokenType.PUNCTUATION,
           value: char,
           line: this.line,
-          column: this.column
+          column: this.column,
+        });
+        this.advance();
+        continue;
+      }
+
+      if ("+-*/%^#=<>".includes(char)) {
+        tokens.push({
+          type: char === "=" ? TokenType.PUNCTUATION : TokenType.OPERATOR,
+          value: char,
+          line: this.line,
+          column: this.column,
         });
         this.advance();
         continue;
@@ -231,9 +302,9 @@ class LuaLexer {
 
     tokens.push({
       type: TokenType.EOF,
-      value: '',
+      value: "",
       line: this.line,
-      column: this.column
+      column: this.column,
     });
 
     return tokens;
@@ -245,11 +316,13 @@ class LuaParser {
   private position: number = 0;
 
   constructor(tokens: Token[]) {
-    this.tokens = tokens.filter(t => t.type !== TokenType.COMMENT);
+    this.tokens = tokens.filter((t) => t.type !== TokenType.COMMENT);
   }
 
   private peek(offset: number = 0): Token {
-    return this.tokens[this.position + offset] || this.tokens[this.tokens.length - 1];
+    return (
+      this.tokens[this.position + offset] || this.tokens[this.tokens.length - 1]
+    );
   }
 
   private advance(): Token {
@@ -259,7 +332,9 @@ class LuaParser {
   private expect(value: string): Token {
     const token = this.advance();
     if (token.value !== value) {
-      throw new Error(`Expected '${value}' but got '${token.value}' at line ${token.line}`);
+      throw new Error(
+        `Expected '${value}' but got '${token.value}' at line ${token.line}`
+      );
     }
     return token;
   }
@@ -276,17 +351,32 @@ class LuaParser {
         const stmt = this.parseStatement();
         if (stmt) statements.push(stmt);
       } catch (e) {
-        console.error('Parse error:', e);
-        // Skip to next statement
-        while (!this.match(';', 'end', 'local', 'function') && this.peek().type !== TokenType.EOF) {
+        console.error("Parse error:", e);
+        // ✅ Forzar avance para evitar bucle infinito
+        if (this.position < this.tokens.length - 1) {
+          this.advance(); // Avanzar al menos 1 token
+        }
+        // Skip hasta siguiente statement válido
+        let skipCount = 0;
+        while (
+          !this.match(";", "end", "local", "function") &&
+          this.peek().type !== TokenType.EOF &&
+          skipCount < 100
+        ) {
+          // ✅ Límite de seguridad
           this.advance();
+          skipCount++;
+        }
+        if (skipCount >= 100) {
+          console.error("❌ Parser stuck - aborting");
+          break; // Salir del loop principal
         }
       }
     }
 
     return {
-      type: 'Program',
-      children: statements
+      type: "Program",
+      children: statements,
     };
   }
 
@@ -294,32 +384,32 @@ class LuaParser {
     const token = this.peek();
 
     // Local variable
-    if (token.value === 'local') {
+    if (token.value === "local") {
       return this.parseLocalStatement();
     }
 
     // Function definition
-    if (token.value === 'function') {
+    if (token.value === "function") {
       return this.parseFunctionDeclaration();
     }
 
     // If statement
-    if (token.value === 'if') {
+    if (token.value === "if") {
       return this.parseIfStatement();
     }
 
     // While loop
-    if (token.value === 'while') {
+    if (token.value === "while") {
       return this.parseWhileLoop();
     }
 
     // For loop
-    if (token.value === 'for') {
+    if (token.value === "for") {
       return this.parseForLoop();
     }
 
     // Return statement
-    if (token.value === 'return') {
+    if (token.value === "return") {
       return this.parseReturnStatement();
     }
 
@@ -333,187 +423,190 @@ class LuaParser {
 
     let value: ASTNode | undefined;
 
-    if (this.peek().value === '=') {
+    if (this.peek().value === "=") {
       this.advance(); // skip '='
       value = this.parseExpression();
     }
 
     return {
-      type: 'LocalDeclaration',
+      type: "LocalDeclaration",
       value: name.value,
       children: value ? [value] : [],
-      line: name.line
+      line: name.line,
     };
   }
 
   private parseFunctionDeclaration(): ASTNode {
     const startToken = this.advance(); // 'function'
-    
-    let name = '';
+
+    let name = "";
     let isMethod = false;
 
     // Parse function name (can be table.method or module:method)
     while (this.peek().type === TokenType.IDENTIFIER) {
       name += this.advance().value;
-      if (this.match('.', ':')) {
+      if (this.match(".", ":")) {
         const sep = this.advance().value;
         name += sep;
-        isMethod = sep === ':';
+        isMethod = sep === ":";
       } else {
         break;
       }
     }
 
     // Parse parameters
-    this.expect('(');
+    this.expect("(");
     const params: string[] = [];
 
-    while (!this.match(')')) {
+    while (!this.match(")")) {
       if (this.peek().type === TokenType.IDENTIFIER) {
         params.push(this.advance().value);
-        if (this.match(',')) this.advance();
+        if (this.match(",")) this.advance();
       } else {
         break;
       }
     }
 
-    this.expect(')');
+    this.expect(")");
 
     // Parse body
     const body: ASTNode[] = [];
-    while (!this.match('end') && this.peek().type !== TokenType.EOF) {
+    while (!this.match("end") && this.peek().type !== TokenType.EOF) {
       const stmt = this.parseStatement();
       if (stmt) body.push(stmt);
     }
 
-    if (this.match('end')) this.advance();
+    if (this.match("end")) this.advance();
 
     return {
-      type: 'FunctionDeclaration',
+      type: "FunctionDeclaration",
       value: name,
       metadata: { params, isMethod },
       children: body,
-      line: startToken.line
+      line: startToken.line,
     };
   }
 
   private parseIfStatement(): ASTNode {
     const startToken = this.advance(); // 'if'
     const condition = this.parseExpression();
-    
-    if (this.match('then')) this.advance();
+
+    if (this.match("then")) this.advance();
 
     const consequent: ASTNode[] = [];
-    while (!this.match('else', 'elseif', 'end') && this.peek().type !== TokenType.EOF) {
+    while (
+      !this.match("else", "elseif", "end") &&
+      this.peek().type !== TokenType.EOF
+    ) {
       const stmt = this.parseStatement();
       if (stmt) consequent.push(stmt);
     }
 
     let alternate: ASTNode[] = [];
-    if (this.match('else')) {
+    if (this.match("else")) {
       this.advance();
-      while (!this.match('end') && this.peek().type !== TokenType.EOF) {
+      while (!this.match("end") && this.peek().type !== TokenType.EOF) {
         const stmt = this.parseStatement();
         if (stmt) alternate.push(stmt);
       }
     }
 
-    if (this.match('end')) this.advance();
+    if (this.match("end")) this.advance();
 
     return {
-      type: 'IfStatement',
+      type: "IfStatement",
       value: condition,
       children: consequent,
       metadata: { alternate },
-      line: startToken.line
+      line: startToken.line,
     };
   }
 
   private parseWhileLoop(): ASTNode {
     const startToken = this.advance(); // 'while'
     const condition = this.parseExpression();
-    
-    if (this.match('do')) this.advance();
+
+    if (this.match("do")) this.advance();
 
     const body: ASTNode[] = [];
-    while (!this.match('end') && this.peek().type !== TokenType.EOF) {
+    while (!this.match("end") && this.peek().type !== TokenType.EOF) {
       const stmt = this.parseStatement();
       if (stmt) body.push(stmt);
     }
 
-    if (this.match('end')) this.advance();
+    if (this.match("end")) this.advance();
 
     return {
-      type: 'WhileLoop',
+      type: "WhileLoop",
       value: condition,
       children: body,
-      line: startToken.line
+      line: startToken.line,
     };
   }
 
   private parseForLoop(): ASTNode {
     const startToken = this.advance(); // 'for'
-    const iterator = this.advance().value;
+
+    const variable = this.advance().value;
 
     // Numeric for: for i = 1, 10 do
-    if (this.match('=')) {
+    if (this.match("=")) {
       this.advance();
       const start = this.parseExpression();
-      this.expect(',');
+      this.expect(",");
       const end = this.parseExpression();
-      
+
       let step: ASTNode | undefined;
-      if (this.match(',')) {
+      if (this.match(",")) {
         this.advance();
         step = this.parseExpression();
       }
 
-      if (this.match('do')) this.advance();
+      if (this.match("do")) this.advance();
 
       const body: ASTNode[] = [];
-      while (!this.match('end') && this.peek().type !== TokenType.EOF) {
+      while (!this.match("end") && this.peek().type !== TokenType.EOF) {
         const stmt = this.parseStatement();
         if (stmt) body.push(stmt);
       }
 
-      if (this.match('end')) this.advance();
+      if (this.match("end")) this.advance();
 
       return {
-        type: 'ForLoop',
-        value: iterator,
+        type: "ForLoop",
+        value: variable,
         metadata: { start, end, step },
         children: body,
-        line: startToken.line
+        line: startToken.line,
       };
     }
 
     // Generic for: for k, v in pairs(t) do
-    const variables = [iterator];
-    while (this.match(',')) {
+    const variables = [variable];
+    while (this.match(",")) {
       this.advance();
       variables.push(this.advance().value);
     }
 
-    if (this.match('in')) this.advance();
-
+    this.expect("in");
     const iterable = this.parseExpression();
 
-    if (this.match('do')) this.advance();
+    if (this.match("do")) this.advance();
 
     const body: ASTNode[] = [];
-    while (!this.match('end') && this.peek().type !== TokenType.EOF) {
+    while (!this.match("end") && this.peek().type !== TokenType.EOF) {
       const stmt = this.parseStatement();
       if (stmt) body.push(stmt);
     }
 
-    if (this.match('end')) this.advance();
+    if (this.match("end")) this.advance();
 
     return {
-      type: 'ForInLoop',
-      value: variables.join(', '),
+      type: "GenericForLoop",
+      value: variables.join(", "),
       metadata: { iterable },
       children: body,
-      line: startToken.line
+      line: startToken.line,
     };
   }
 
@@ -521,27 +614,27 @@ class LuaParser {
     const startToken = this.advance(); // 'return'
     const values: ASTNode[] = [];
 
-    if (!this.match('end') && this.peek().type !== TokenType.EOF) {
+    if (!this.match("end") && this.peek().type !== TokenType.EOF) {
       values.push(this.parseExpression());
-      while (this.match(',')) {
+      while (this.match(",")) {
         this.advance();
         values.push(this.parseExpression());
       }
     }
 
     return {
-      type: 'ReturnStatement',
+      type: "ReturnStatement",
       children: values,
-      line: startToken.line
+      line: startToken.line,
     };
   }
 
   private parseExpressionStatement(): ASTNode | null {
     const expr = this.parseExpression();
     return {
-      type: 'ExpressionStatement',
+      type: "ExpressionStatement",
       children: [expr],
-      line: expr.line
+      line: expr.line,
     };
   }
 
@@ -552,13 +645,13 @@ class LuaParser {
   private parseAssignment(): ASTNode {
     let left = this.parseLogicalOr();
 
-    if (this.match('=')) {
+    if (this.match("=")) {
       this.advance();
       const right = this.parseExpression();
       return {
-        type: 'Assignment',
+        type: "Assignment",
         metadata: { left, right },
-        line: left.line
+        line: left.line,
       };
     }
 
@@ -568,14 +661,14 @@ class LuaParser {
   private parseLogicalOr(): ASTNode {
     let left = this.parseLogicalAnd();
 
-    while (this.match('or')) {
+    while (this.match("or")) {
       const op = this.advance().value;
       const right = this.parseLogicalAnd();
       left = {
-        type: 'BinaryExpression',
+        type: "BinaryExpression",
         value: op,
         metadata: { left, right },
-        line: left.line
+        line: left.line,
       };
     }
 
@@ -585,14 +678,14 @@ class LuaParser {
   private parseLogicalAnd(): ASTNode {
     let left = this.parseComparison();
 
-    while (this.match('and')) {
+    while (this.match("and")) {
       const op = this.advance().value;
       const right = this.parseComparison();
       left = {
-        type: 'BinaryExpression',
+        type: "BinaryExpression",
         value: op,
         metadata: { left, right },
-        line: left.line
+        line: left.line,
       };
     }
 
@@ -602,14 +695,14 @@ class LuaParser {
   private parseComparison(): ASTNode {
     let left = this.parseAdditive();
 
-    while (this.match('==', '~=', '<', '>', '<=', '>=')) {
+    while (this.match("==", "~=", "<", ">", "<=", ">=")) {
       const op = this.advance().value;
       const right = this.parseAdditive();
       left = {
-        type: 'BinaryExpression',
+        type: "BinaryExpression",
         value: op,
         metadata: { left, right },
-        line: left.line
+        line: left.line,
       };
     }
 
@@ -619,14 +712,14 @@ class LuaParser {
   private parseAdditive(): ASTNode {
     let left = this.parseMultiplicative();
 
-    while (this.match('+', '-')) {
+    while (this.match("+", "-")) {
       const op = this.advance().value;
       const right = this.parseMultiplicative();
       left = {
-        type: 'BinaryExpression',
+        type: "BinaryExpression",
         value: op,
         metadata: { left, right },
-        line: left.line
+        line: left.line,
       };
     }
 
@@ -636,14 +729,14 @@ class LuaParser {
   private parseMultiplicative(): ASTNode {
     let left = this.parseUnary();
 
-    while (this.match('*', '/', '%')) {
+    while (this.match("*", "/", "%")) {
       const op = this.advance().value;
       const right = this.parseUnary();
       left = {
-        type: 'BinaryExpression',
+        type: "BinaryExpression",
         value: op,
         metadata: { left, right },
-        line: left.line
+        line: left.line,
       };
     }
 
@@ -651,14 +744,14 @@ class LuaParser {
   }
 
   private parseUnary(): ASTNode {
-    if (this.match('not', '-', '#')) {
+    if (this.match("not", "#", "-")) {
       const op = this.advance().value;
       const operand = this.parseUnary();
       return {
-        type: 'UnaryExpression',
+        type: "UnaryExpression",
         value: op,
         children: [operand],
-        line: operand.line
+        line: operand.line,
       };
     }
 
@@ -670,46 +763,46 @@ class LuaParser {
 
     while (true) {
       // Function call
-      if (this.match('(')) {
+      if (this.match("(")) {
         const args = this.parseArguments();
         expr = {
-          type: 'FunctionCall',
+          type: "FunctionCall",
           metadata: { callee: expr, args },
-          line: expr.line
+          line: expr.line,
         };
       }
       // Method call
-      else if (this.match(':')) {
+      else if (this.match(":")) {
         this.advance();
         const method = this.advance().value;
-        const args = this.match('(') ? this.parseArguments() : [];
+        const args = this.match("(") ? this.parseArguments() : [];
         expr = {
-          type: 'MethodCall',
+          type: "MethodCall",
           value: method,
           metadata: { object: expr, args },
-          line: expr.line
+          line: expr.line,
         };
       }
       // Property access
-      else if (this.match('.')) {
+      else if (this.match(".")) {
         this.advance();
         const property = this.advance().value;
         expr = {
-          type: 'MemberExpression',
+          type: "MemberExpression",
           value: property,
           metadata: { object: expr },
-          line: expr.line
+          line: expr.line,
         };
       }
       // Index access
-      else if (this.match('[')) {
+      else if (this.match("[")) {
         this.advance();
         const index = this.parseExpression();
-        this.expect(']');
+        this.expect("]");
         expr = {
-          type: 'IndexExpression',
+          type: "IndexExpression",
           metadata: { object: expr, index },
-          line: expr.line
+          line: expr.line,
         };
       } else {
         break;
@@ -720,15 +813,15 @@ class LuaParser {
   }
 
   private parseArguments(): ASTNode[] {
-    this.expect('(');
+    this.expect("(");
     const args: ASTNode[] = [];
 
-    while (!this.match(')') && this.peek().type !== TokenType.EOF) {
+    while (!this.match(")") && this.peek().type !== TokenType.EOF) {
       args.push(this.parseExpression());
-      if (this.match(',')) this.advance();
+      if (this.match(",")) this.advance();
     }
 
-    this.expect(')');
+    this.expect(")");
     return args;
   }
 
@@ -739,36 +832,36 @@ class LuaParser {
     if (token.type === TokenType.STRING) {
       this.advance();
       return {
-        type: 'StringLiteral',
+        type: "StringLiteral",
         value: token.value,
-        line: token.line
+        line: token.line,
       };
     }
 
     if (token.type === TokenType.NUMBER) {
       this.advance();
       return {
-        type: 'NumberLiteral',
+        type: "NumberLiteral",
         value: token.value,
-        line: token.line
+        line: token.line,
       };
     }
 
-    if (token.value === 'true' || token.value === 'false') {
+    if (token.value === "true" || token.value === "false") {
       this.advance();
       return {
-        type: 'BooleanLiteral',
-        value: token.value === 'true',
-        line: token.line
+        type: "BooleanLiteral",
+        value: token.value === "true",
+        line: token.line,
       };
     }
 
-    if (token.value === 'nil') {
+    if (token.value === "nil") {
       this.advance();
       return {
-        type: 'NilLiteral',
+        type: "NilLiteral",
         value: null,
-        line: token.line
+        line: token.line,
       };
     }
 
@@ -776,27 +869,27 @@ class LuaParser {
     if (token.type === TokenType.IDENTIFIER) {
       this.advance();
       return {
-        type: 'Identifier',
+        type: "Identifier",
         value: token.value,
-        line: token.line
+        line: token.line,
       };
     }
 
     // Grouped expression
-    if (token.value === '(') {
+    if (token.value === "(") {
       this.advance();
       const expr = this.parseExpression();
-      this.expect(')');
+      this.expect(")");
       return expr;
     }
 
     // Table constructor
-    if (token.value === '{') {
+    if (token.value === "{") {
       return this.parseTableConstructor();
     }
 
     // Anonymous function
-    if (token.value === 'function') {
+    if (token.value === "function") {
       return this.parseAnonymousFunction();
     }
 
@@ -807,80 +900,83 @@ class LuaParser {
     const startToken = this.advance(); // '{'
     const fields: ASTNode[] = [];
 
-    while (!this.match('}') && this.peek().type !== TokenType.EOF) {
+    while (!this.match("}") && this.peek().type !== TokenType.EOF) {
       // Key-value pair: [key] = value or key = value
-      if (this.match('[')) {
+      if (this.match("[")) {
         this.advance();
         const key = this.parseExpression();
-        this.expect(']');
-        this.expect('=');
+        this.expect("]");
+        this.expect("=");
         const value = this.parseExpression();
         fields.push({
-          type: 'TableField',
-          metadata: { key, value }
+          type: "TableField",
+          metadata: { key, value },
         });
-      } else if (this.peek().type === TokenType.IDENTIFIER && this.peek(1).value === '=') {
+      } else if (
+        this.peek().type === TokenType.IDENTIFIER &&
+        this.peek(1).value === "="
+      ) {
         const key = this.advance().value;
         this.advance(); // '='
         const value = this.parseExpression();
         fields.push({
-          type: 'TableField',
+          type: "TableField",
           metadata: {
-            key: { type: 'StringLiteral', value: key },
-            value
-          }
+            key: { type: "StringLiteral", value: key },
+            value,
+          },
         });
       } else {
         // Array-style: just value
         const value = this.parseExpression();
         fields.push({
-          type: 'TableField',
-          metadata: { value }
+          type: "TableField",
+          metadata: { value },
         });
       }
 
-      if (this.match(',', ';')) this.advance();
+      if (this.match(",", ";")) this.advance();
     }
 
-    this.expect('}');
+    this.expect("}");
 
     return {
-      type: 'TableConstructor',
+      type: "TableConstructor",
       children: fields,
-      line: startToken.line
+      line: startToken.line,
     };
   }
 
   private parseAnonymousFunction(): ASTNode {
     const startToken = this.advance(); // 'function'
-    
-    this.expect('(');
+
+    this.expect("(");
     const params: string[] = [];
 
-    while (!this.match(')')) {
+    while (!this.match(")")) {
       if (this.peek().type === TokenType.IDENTIFIER) {
         params.push(this.advance().value);
-        if (this.match(',')) this.advance();
+        if (this.match(",")) this.advance();
       } else {
         break;
       }
     }
 
-    this.expect(')');
+    this.expect(")");
 
     const body: ASTNode[] = [];
-    while (!this.match('end') && this.peek().type !== TokenType.EOF) {
+    while (!this.match("end") && this.peek().type !== TokenType.EOF) {
       const stmt = this.parseStatement();
       if (stmt) body.push(stmt);
     }
 
-    if (this.match('end')) this.advance();
+    if (this.match("end")) this.advance();
 
     return {
-      type: 'AnonymousFunction',
+      type: "AnonymousFunction",
       metadata: { params },
       children: body,
-      line: startToken.line
+      line: startToken.line,
     };
   }
 }

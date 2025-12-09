@@ -8,25 +8,18 @@ import VisualToLuaGenerator from './visualToLua';
  * Convierte código Lua a nodos visuales usando el parser AST
  * Reemplaza la función applyCodeToVisual() en editor.tsx
  */
-export function convertLuaToVisual(
-  luaCode: string
-): { nodes: Node[]; edges: Edge[]; error?: string } {
+// editorIntegration.ts
+export function convertLuaToVisual(luaCode: string): { nodes: Node[]; edges: Edge[]; error?: string } {
   try {
-    // 1. Tokenizar
     const lexer = new LuaLexer(luaCode);
     const tokens = lexer.tokenize();
-
-    // 2. Parsear a AST
     const parser = new LuaParser(tokens);
     const ast = parser.parse();
-
-    // 3. Convertir AST a nodos ReactFlow
     const converter = new ASTToVisualConverter();
     const { nodes, edges } = converter.convert(ast);
-
     return { nodes, edges };
   } catch (error) {
-    console.error('Error al convertir Lua a Visual:', error);
+    // ✅ Retorna error en lugar de lanzarlo
     return {
       nodes: [],
       edges: [],
