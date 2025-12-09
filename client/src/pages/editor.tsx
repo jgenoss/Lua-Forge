@@ -1,5 +1,9 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
-import { convertLuaToVisual, convertVisualToLua, extractHeaderCode } from '../utils/editorIntegration';
+import {
+  convertLuaToVisual,
+  convertVisualToLua,
+  extractHeaderCode,
+} from "../utils/editorIntegration";
 import ReactFlow, {
   ReactFlowProvider,
   addEdge,
@@ -201,64 +205,81 @@ export default function EditorPage() {
 
   // --- GENERADOR DE CÓDIGO (VISUAL -> LUA) ---
   const generateLuaCode = (currentNodes: Node[], currentEdges: Edge[]) => {
-  if (isSyncing) return;
+    if (isSyncing) return;
 
-  const code = convertVisualToLua(currentNodes, currentEdges, activeFile.headerCode);
-  setGeneratedCode(code);
-  
-  setFiles((prev) =>
-    prev.map((f) => {
-      if (f.id === activeFile.id) {
-        return {
-          ...f,
-          content: code,
-        };
-      }
-      return f;
-    })
-  );
-};
-
-  // --- PARSER (LUA -> VISUAL) ---
-  const applyCodeToVisual = () => {
-    setIsSyncing(true);
-    const code = generatedCode;
-    const headerCode = extractHeaderCode(code);
-    const {
-      nodes: newNodes,
-      edges: newEdges,
-      error,
-    } = convertLuaToVisual(code);
-
-    if (error) {
-      toast({
-        title: "Error de Sintaxis",
-        description: error,
-        variant: "destructive",
-      });
-      setIsSyncing(false);
-      return;
-    }
-
-    setNodes(newNodes);
-    setEdges(newEdges);
+    const code = convertVisualToLua(
+      currentNodes,
+      currentEdges,
+      activeFile.headerCode
+    );
+    setGeneratedCode(code);
 
     setFiles((prev) =>
       prev.map((f) => {
         if (f.id === activeFile.id) {
           return {
             ...f,
-            nodes: newNodes,
-            edges: newEdges,
-            headerCode,
             content: code,
           };
         }
         return f;
       })
     );
+  };
 
-    setIsSyncing(false);
+  // --- PARSER (LUA -> VISUAL) ---
+  const applyCodeToVisual = () => {
+    setIsSyncing(true);
+    const code = generatedCode;
+
+    // Ejecutar en el siguiente tick para permitir que la UI actualice el estado de carga
+    setTimeout(() => {
+      try {
+        const headerCode = extractHeaderCode(code);
+        const {
+          nodes: newNodes,
+          edges: newEdges,
+          error,
+        } = convertLuaToVisual(code);
+
+        if (error) {
+          toast({
+            title: "Error de Sintaxis",
+            description: error,
+            variant: "destructive",
+          });
+          setIsSyncing(false);
+          return;
+        }
+
+        setNodes(newNodes);
+        setEdges(newEdges);
+
+        setFiles((prev) =>
+          prev.map((f) => {
+            if (f.id === activeFile.id) {
+              return {
+                ...f,
+                nodes: newNodes,
+                edges: newEdges,
+                headerCode,
+                content: code,
+              };
+            }
+            return f;
+          })
+        );
+      } catch (e) {
+        console.error("Error crítico al aplicar código:", e);
+        toast({
+          title: "Error Crítico",
+          description: "Ocurrió un error inesperado al procesar el código.",
+          variant: "destructive",
+        });
+      } finally {
+        setIsSyncing(false);
+      }
+    }, 100);
   };
 
   const handleCodeChange = (value: string | undefined) => {
@@ -564,7 +585,7 @@ export default function EditorPage() {
                       className="h-7 text-xs gap-2 border-amber-600/50 text-amber-500 hover:bg-amber-900/20"
                     >
                       <RefreshCw className="w-3 h-3" />
-                      Aplicar Código a Visual (Experimental)
+                      Aplicar Código a Visual
                     </Button>
                   </div>
                   <div className="flex-1">

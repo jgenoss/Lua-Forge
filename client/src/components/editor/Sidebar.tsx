@@ -439,8 +439,9 @@ export function Sidebar() {
     new Set(['events', 'flow-control'])
   );
 
-  const onDragStart = (event: React.DragEvent, nodeType: string) => {
-    event.dataTransfer.setData('application/reactflow', nodeType);
+  const onDragStart = (event: React.DragEvent, nodeType: string, label: string) => {
+    event.dataTransfer.setData('application/reactflow/type', nodeType);
+    event.dataTransfer.setData('application/reactflow/label', label);
     event.dataTransfer.effectAllowed = 'move';
   };
 
@@ -500,7 +501,7 @@ export function Sidebar() {
                         key={item.type}
                         className="flex items-center gap-2 px-2 py-1.5 cursor-move hover:bg-[#2a2a2a] rounded transition-colors group"
                         draggable
-                        onDragStart={(e) => onDragStart(e, item.type)}
+                        onDragStart={(e) => onDragStart(e, item.type, item.label)}
                       >
                         <Icon className={`w-4 h-4 ${item.color} shrink-0`} />
                         <span className="text-xs text-gray-300 group-hover:text-white truncate">
