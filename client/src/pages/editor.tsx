@@ -232,7 +232,6 @@ export default function EditorPage() {
     setIsSyncing(true);
     const code = generatedCode;
 
-    // Ejecutar en el siguiente tick para permitir que la UI actualice el estado de carga
     setTimeout(() => {
       try {
         const headerCode = extractHeaderCode(code);
@@ -248,7 +247,6 @@ export default function EditorPage() {
             description: error,
             variant: "destructive",
           });
-          setIsSyncing(false);
           return;
         }
 
@@ -277,9 +275,10 @@ export default function EditorPage() {
           variant: "destructive",
         });
       } finally {
+        // ✅ SE EJECUTA SIEMPRE
         setIsSyncing(false);
       }
-    }, 100);
+    }, 0);
   };
 
   const handleCodeChange = (value: string | undefined) => {
@@ -319,10 +318,34 @@ export default function EditorPage() {
   // Guardar al conectar
   const onConnect = useCallback(
     (params: Connection) => {
-      setEdges((eds) => addEdge(params, eds));
-      setTimeout(onGraphChange, 50);
+      setEdges((eds) => {
+        const updatedEdges = addEdge(params, eds);
+
+        // ✅ Generar código con edges actualizados
+        setTimeout(() => {
+          if (!isSyncing) {
+            const code = convertVisualToLua(
+              nodes,
+              updatedEdges,
+              activeFile.headerCode
+            );
+            setGeneratedCode(code);
+
+            setFiles((prev) =>
+              prev.map((f) => {
+                if (f.id === activeFile.id) {
+                  return { ...f, edges: updatedEdges, content: code };
+                }
+                return f;
+              })
+            );
+          }
+        }, 50);
+
+        return updatedEdges;
+      });
     },
-    [setEdges, onGraphChange]
+    [nodes, isSyncing, activeFile]
   );
 
   const onDragOver = useCallback((event: React.DragEvent) => {
@@ -349,10 +372,34 @@ export default function EditorPage() {
         data: { label },
       };
 
-      setNodes((nds) => nds.concat(newNode));
-      setTimeout(onGraphChange, 50);
+      setNodes((nds) => {
+        const updatedNodes = nds.concat(newNode);
+
+        // ✅ Generar código inmediatamente con nodos actualizados
+        setTimeout(() => {
+          if (!isSyncing) {
+            const code = convertVisualToLua(
+              updatedNodes,
+              edges,
+              activeFile.headerCode
+            );
+            setGeneratedCode(code);
+
+            setFiles((prev) =>
+              prev.map((f) => {
+                if (f.id === activeFile.id) {
+                  return { ...f, nodes: updatedNodes, edges, content: code };
+                }
+                return f;
+              })
+            );
+          }
+        }, 50);
+
+        return updatedNodes;
+      });
     },
-    [reactFlowInstance, setNodes, onGraphChange]
+    [reactFlowInstance, edges, isSyncing, activeFile]
   );
 
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
