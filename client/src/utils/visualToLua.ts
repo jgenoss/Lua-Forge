@@ -177,6 +177,83 @@ class VisualToLuaGenerator {
         this.generateReturn(node);
         break;
 
+      // QBCore DrawText
+      case 'qb-drawtext-show':
+        this.generateQBDrawTextShow(node);
+        break;
+      
+      case 'qb-drawtext-hide':
+        this.generateQBDrawTextHide(node);
+        break;
+      
+      case 'qb-drawtext-3d':
+        this.generateQBDrawText3D(node);
+        break;
+
+      // FiveM Drawing
+      case 'begin-text-command':
+      case 'add-text-component':
+      case 'end-text-command':
+      case 'set-text-font':
+      case 'set-text-scale':
+      case 'set-text-colour':
+      case 'draw-rect':
+      case 'draw-sprite':
+        this.generateFiveMDrawing(node);
+        break;
+
+      // Scaleforms
+      case 'request-scaleform':
+      case 'draw-scaleform-fullscreen':
+      case 'begin-scaleform-method':
+        this.generateScaleform(node);
+        break;
+
+      // Screen Effects
+      case 'do-screen-fade-in':
+      case 'do-screen-fade-out':
+        this.generateScreenFade(node);
+        break;
+
+      // Tasks
+      case 'task-go-to-entity':
+      case 'task-go-to-coord':
+      case 'task-wander-standard':
+      case 'task-hands-up':
+      case 'clear-ped-tasks':
+        this.generateTask(node);
+        break;
+
+      // ESX Functions
+      case 'esx-notify':
+        this.generateESXNotify(node);
+        break;
+      
+      case 'esx-game-closest-player':
+      case 'esx-game-teleport':
+        this.generateESXGame(node);
+        break;
+
+      // QBCore Extended
+      case 'qb-spawn-vehicle':
+      case 'qb-delete-vehicle':
+      case 'qb-progressbar':
+        this.generateQBExtended(node);
+        break;
+
+      // Weapons
+      case 'weapon-clip-size':
+      case 'weapon-ammo':
+      case 'weapon-infinite-ammo':
+        this.generateWeapon(node);
+        break;
+
+      // Collision
+      case 'start-shape-test-ray':
+      case 'get-shape-test-result':
+        this.generateCollision(node);
+        break;
+
       default:
         console.warn(`Unhandled node type: ${nodeType}`);
         this.generateGenericNode(node);
@@ -483,6 +560,281 @@ class VisualToLuaGenerator {
     }
 
     const children = this.findChildren(node.id);
+    for (const child of children) {
+      this.generateNodeTree(child);
+    }
+  }
+
+  // QBCore DrawText
+  private generateQBDrawTextShow(node: Node): void {
+    const text = this.getData(node, 'text', 'Texto');
+    const position = this.getData(node, 'position', 'left');
+    this.write(`exports['qb-core']:DrawText('${this.escapeSingleQuote(text)}', '${position}')`);
+    this.generateChildren(node.id);
+  }
+
+  private generateQBDrawTextHide(node: Node): void {
+    this.write(`exports['qb-core']:HideText()`);
+    this.generateChildren(node.id);
+  }
+
+  private generateQBDrawText3D(node: Node): void {
+    const x = this.getData(node, 'x', '0.0');
+    const y = this.getData(node, 'y', '0.0');
+    const z = this.getData(node, 'z', '0.0');
+    const text = this.getData(node, 'text', 'Texto 3D');
+    this.write(`QBCore.Functions.DrawText3D(${x}, ${y}, ${z}, '${this.escapeSingleQuote(text)}')`);
+    this.generateChildren(node.id);
+  }
+
+  // FiveM Drawing
+  private generateFiveMDrawing(node: Node): void {
+    const nodeType = node.type;
+    
+    switch(nodeType) {
+      case 'begin-text-command':
+        this.write(`BeginTextCommandDisplayText('STRING')`);
+        break;
+      case 'add-text-component':
+        const text = this.getData(node, 'text', 'Texto');
+        this.write(`AddTextComponentSubstringPlayerName('${this.escapeSingleQuote(text)}')`);
+        break;
+      case 'end-text-command':
+        const x = this.getData(node, 'x', '0.5');
+        const y = this.getData(node, 'y', '0.5');
+        this.write(`EndTextCommandDisplayText(${x}, ${y})`);
+        break;
+      case 'set-text-font':
+        const font = this.getData(node, 'font', '4');
+        this.write(`SetTextFont(${font})`);
+        break;
+      case 'set-text-scale':
+        const scaleX = this.getData(node, 'scaleX', '0.5');
+        const scaleY = this.getData(node, 'scaleY', '0.5');
+        this.write(`SetTextScale(${scaleX}, ${scaleY})`);
+        break;
+      case 'set-text-colour':
+        const r = this.getData(node, 'r', '255');
+        const g = this.getData(node, 'g', '255');
+        const b = this.getData(node, 'b', '255');
+        const a = this.getData(node, 'a', '255');
+        this.write(`SetTextColour(${r}, ${g}, ${b}, ${a})`);
+        break;
+      case 'draw-rect':
+        const rx = this.getData(node, 'x', '0.5');
+        const ry = this.getData(node, 'y', '0.5');
+        const width = this.getData(node, 'width', '0.1');
+        const height = this.getData(node, 'height', '0.1');
+        const rr = this.getData(node, 'r', '255');
+        const rg = this.getData(node, 'g', '255');
+        const rb = this.getData(node, 'b', '255');
+        const ra = this.getData(node, 'a', '255');
+        this.write(`DrawRect(${rx}, ${ry}, ${width}, ${height}, ${rr}, ${rg}, ${rb}, ${ra})`);
+        break;
+      case 'draw-sprite':
+        const dict = this.getData(node, 'dict', 'helicopterhud');
+        const name = this.getData(node, 'name', 'hud_corner');
+        const sx = this.getData(node, 'x', '0.5');
+        const sy = this.getData(node, 'y', '0.5');
+        const sw = this.getData(node, 'width', '0.1');
+        const sh = this.getData(node, 'height', '0.1');
+        this.write(`DrawSprite('${dict}', '${name}', ${sx}, ${sy}, ${sw}, ${sh}, 0.0, 255, 255, 255, 255)`);
+        break;
+    }
+    
+    this.generateChildren(node.id);
+  }
+
+  // Scaleforms
+  private generateScaleform(node: Node): void {
+    const nodeType = node.type;
+    
+    switch(nodeType) {
+      case 'request-scaleform':
+        const name = this.getData(node, 'name', 'mp_big_message_freemode');
+        this.write(`local scaleform = RequestScaleformMovie('${name}')`);
+        this.write(`while not HasScaleformMovieLoaded(scaleform) do Wait(0) end`);
+        break;
+      case 'draw-scaleform-fullscreen':
+        this.write(`DrawScaleformMovieFullscreen(scaleform, 255, 255, 255, 255, 0)`);
+        break;
+      case 'begin-scaleform-method':
+        const method = this.getData(node, 'method', 'SHOW_SHARD_WASTED_MP_MESSAGE');
+        this.write(`BeginScaleformMovieMethod(scaleform, '${method}')`);
+        break;
+    }
+    
+    this.generateChildren(node.id);
+  }
+
+  // Screen Effects
+  private generateScreenFade(node: Node): void {
+    const duration = this.getData(node, 'duration', '1000');
+    
+    if (node.type === 'do-screen-fade-in') {
+      this.write(`DoScreenFadeIn(${duration})`);
+    } else {
+      this.write(`DoScreenFadeOut(${duration})`);
+    }
+    
+    this.generateChildren(node.id);
+  }
+
+  // Tasks
+  private generateTask(node: Node): void {
+    const nodeType = node.type;
+    const ped = this.getData(node, 'ped', 'PlayerPedId()');
+    
+    switch(nodeType) {
+      case 'task-go-to-entity':
+        const entity = this.getData(node, 'entity', 'targetEntity');
+        const distance = this.getData(node, 'distance', '1.0');
+        this.write(`TaskGoToEntity(${ped}, ${entity}, -1, ${distance}, 2.0, 0, 0)`);
+        break;
+      case 'task-go-to-coord':
+        const x = this.getData(node, 'x', '0.0');
+        const y = this.getData(node, 'y', '0.0');
+        const z = this.getData(node, 'z', '0.0');
+        this.write(`TaskGoToCoordAnyMeans(${ped}, ${x}, ${y}, ${z}, 1.0, 0, 0, 786603, 0xbf800000)`);
+        break;
+      case 'task-wander-standard':
+        this.write(`TaskWanderStandard(${ped}, 10.0, 10)`);
+        break;
+      case 'task-hands-up':
+        const duration = this.getData(node, 'duration', '-1');
+        this.write(`TaskHandsUp(${ped}, ${duration}, 0, -1, false)`);
+        break;
+      case 'clear-ped-tasks':
+        this.write(`ClearPedTasks(${ped})`);
+        break;
+    }
+    
+    this.generateChildren(node.id);
+  }
+
+  // ESX Functions
+  private generateESXNotify(node: Node): void {
+    const message = this.getData(node, 'message', 'Notificación');
+    const type = this.getData(node, 'notifyType', 'success');
+    const length = this.getData(node, 'length', '5000');
+    
+    this.write(`ESX.ShowNotification('${this.escapeSingleQuote(message)}', '${type}', ${length})`);
+    this.generateChildren(node.id);
+  }
+
+  private generateESXGame(node: Node): void {
+    const nodeType = node.type;
+    
+    switch(nodeType) {
+      case 'esx-game-closest-player':
+        this.write(`local closestPlayer, closestDistance = ESX.Game.GetClosestPlayer()`);
+        break;
+      case 'esx-game-teleport':
+        const x = this.getData(node, 'x', '0.0');
+        const y = this.getData(node, 'y', '0.0');
+        const z = this.getData(node, 'z', '0.0');
+        this.write(`ESX.Game.Teleport(PlayerPedId(), vector3(${x}, ${y}, ${z}))`);
+        break;
+    }
+    
+    this.generateChildren(node.id);
+  }
+
+  // QBCore Extended
+  private generateQBExtended(node: Node): void {
+    const nodeType = node.type;
+    
+    switch(nodeType) {
+      case 'qb-spawn-vehicle':
+        const model = this.getData(node, 'model', 'adder');
+        this.write(`QBCore.Functions.SpawnVehicle('${model}', function(veh)`);
+        this.indent();
+        this.write(`SetVehicleNumberPlateText(veh, 'QB'..tostring(math.random(1000, 9999)))`);
+        this.write(`SetEntityHeading(veh, coords.w)`);
+        this.write(`exports['LegacyFuel']:SetFuel(veh, 100.0)`);
+        this.write(`TaskWarpPedIntoVehicle(PlayerPedId(), veh, -1)`);
+        this.write(`TriggerEvent('vehiclekeys:client:SetOwner', QBCore.Functions.GetPlate(veh))`);
+        this.write(`SetVehicleEngineOn(veh, true, true)`);
+        this.outdent();
+        this.write(`end)`);
+        break;
+      case 'qb-delete-vehicle':
+        const vehicle = this.getData(node, 'vehicle', 'vehicle');
+        this.write(`QBCore.Functions.DeleteVehicle(${vehicle})`);
+        break;
+      case 'qb-progressbar':
+        const name = this.getData(node, 'name', 'doing_something');
+        const label = this.getData(node, 'label', 'Haciendo algo...');
+        const duration = this.getData(node, 'duration', '5000');
+        this.write(`QBCore.Functions.Progressbar('${name}', '${this.escapeSingleQuote(label)}', ${duration}, false, true, {`);
+        this.indent();
+        this.write(`disableMovement = true,`);
+        this.write(`disableCarMovement = true,`);
+        this.write(`disableMouse = false,`);
+        this.write(`disableCombat = true`);
+        this.outdent();
+        this.write(`}, {}, {}, {}, function()`);
+        this.indent();
+        this.write(`-- Completado`);
+        this.outdent();
+        this.write(`end, function()`);
+        this.indent();
+        this.write(`-- Cancelado`);
+        this.outdent();
+        this.write(`end)`);
+        break;
+    }
+    
+    this.generateChildren(node.id);
+  }
+
+  // Weapons
+  private generateWeapon(node: Node): void {
+    const nodeType = node.type;
+    const ped = this.getData(node, 'ped', 'PlayerPedId()');
+    
+    switch(nodeType) {
+      case 'weapon-clip-size':
+        const weapon = this.getData(node, 'weapon', 'WEAPON_PISTOL');
+        this.write(`local clipSize = GetWeaponClipSize(GetHashKey('${weapon}'))`);
+        break;
+      case 'weapon-ammo':
+        const weaponHash = this.getData(node, 'weaponHash', 'WEAPON_PISTOL');
+        this.write(`local ammo = GetAmmoInPedWeapon(${ped}, GetHashKey('${weaponHash}'))`);
+        break;
+      case 'weapon-infinite-ammo':
+        const toggle = this.getData(node, 'toggle', 'true');
+        const weaponType = this.getData(node, 'weaponHash', 'WEAPON_PISTOL');
+        this.write(`SetPedInfiniteAmmo(${ped}, ${toggle}, GetHashKey('${weaponType}'))`);
+        break;
+    }
+    
+    this.generateChildren(node.id);
+  }
+
+  // Collision
+  private generateCollision(node: Node): void {
+    const nodeType = node.type;
+    
+    if (nodeType === 'start-shape-test-ray') {
+      const x1 = this.getData(node, 'x1', '0.0');
+      const y1 = this.getData(node, 'y1', '0.0');
+      const z1 = this.getData(node, 'z1', '0.0');
+      const x2 = this.getData(node, 'x2', '0.0');
+      const y2 = this.getData(node, 'y2', '0.0');
+      const z2 = this.getData(node, 'z2', '0.0');
+      this.write(`local rayHandle = StartShapeTestRay(${x1}, ${y1}, ${z1}, ${x2}, ${y2}, ${z2}, -1, PlayerPedId(), 0)`);
+    } else if (nodeType === 'get-shape-test-result') {
+      const handle = this.getData(node, 'handle', 'rayHandle');
+      this.write(`local retval, hit, coords, surfaceNormal, entity = GetShapeTestResult(${handle})`);
+    }
+    
+    this.generateChildren(node.id);
+  }
+
+  // Helper para generar hijos
+  private generateChildren(nodeId: string): void {
+    const children = this.findChildren(nodeId);
     for (const child of children) {
       this.generateNodeTree(child);
     }
